@@ -1,0 +1,37 @@
+const API_URL = (process.env.REACT_APP_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+
+export class ApiClient {
+  constructor(baseUrl = API_URL) { this.baseUrl = baseUrl; this.token = null; }
+  setToken(t) { this.token = t; }
+  url(path, params) {
+    const u = new URL(this.baseUrl + path);
+    if (params) Object.entries(params).forEach(([k,v]) => v!==undefined&&v!==null&&v!=="" && u.searchParams.set(k,v));
+    return u.toString();
+  }
+  async request(path, { method="GET", params, body, formData, headers } = {}) {
+    const init = { method, headers: { ...(headers||{}) } };
+    if (this.token) init.headers["Authorization"] = `Bearer ${this.token}`;
+    if (formData) init.body = formData;
+    else if (body !== undefined) { init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(body); }
+    const res = await fetch(this.url(path, params), init);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(()=>res.statusText)}`);
+    const ct = res.headers.get("content-type") || "";
+    return ct.includes("application/json") ? res.json() : res.text();
+  }
+
+  // Подгони пути под свой бек (имена примерные):
+  listDocuments(params) { return this.request("/documents", { params }); }
+  getDocument(id) { return this.request(`/documents/${encodeURIComponent(id)}`); }
+  createDocument(payload, file) {
+    if (file) {
+      const fd = new FormData();
+      fd.append("file", file);                                  // имя поля как на бэке
+      fd.append("metadata", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+      return this.request("/documents", { method: "POST", formData: fd });
+    }
+    return this.request("/documents", { method: "POST", body: payload });
+  }
+  deleteDocument(id) { return this.request(`/documents/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+}
+
+export const api = new ApiClient();

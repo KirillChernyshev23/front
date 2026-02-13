@@ -1,0 +1,19 @@
+services:
+  frontend:
+    container_name: ed-consult-frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # CRA uses REACT_APP_* vars at build/runtime. Override via .env.local if needed.
+      REACT_APP_API_URL: ${REACT_APP_API_URL:-http://localhost:8000/api/v1}
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    env_file:
+      - .env.local
+

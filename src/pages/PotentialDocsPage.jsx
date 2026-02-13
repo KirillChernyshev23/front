@@ -116,39 +116,13 @@ function getTags(doc) {
   return [];
 }
 
-// ✅ ОПИСАНИЕ: теперь берём из contents
-// ✅ ОПИСАНИЕ: строго только из contents (без fallback на full_text)
-function getPreviewText(doc) {
-  const c = doc?.contents;
-
-  // contents как массив строк
-  if (Array.isArray(c) && c.length && c.every((x) => typeof x === "string")) {
-    const joined = c.map((x) => x.trim()).filter(Boolean).join("\n\n");
-    return joined || "";
+// ✅ ОПИСАНИЕ: теперь берём из API endpoint /documents/{document_id}/summary
+function getPreviewText(doc, annotations) {
+  if (!doc?.id) return "";
+  const annotation = annotations[doc.id];
+  if (typeof annotation === "string") {
+    return annotation.trim() || "";
   }
-
-  // contents как массив объектов
-  if (Array.isArray(c) && c.length && c.some((x) => x && typeof x === "object")) {
-    const pieces = c
-      .map((item) => {
-        if (!item || typeof item !== "object") return "";
-        // подстрахуемся на случай структуры объектов
-        return (
-          item.text ||
-          item.content ||
-          item.body ||
-          item.summary ||
-          item.value ||
-          ""
-        );
-      })
-      .map((x) => (typeof x === "string" ? x.trim() : ""))
-      .filter(Boolean);
-
-    return pieces.length ? pieces.join("\n\n") : "";
-  }
-
-  // если contents пустой/нет — аннотации нет
   return "";
 }
 
@@ -166,6 +140,7 @@ export default function PotentialDocsPage() {
 
   const [openMap, setOpenMap] = useState({});
   const [fullMap, setFullMap] = useState({});
+  const [annotations, setAnnotations] = useState({}); // { documentId: annotationText }
 
   const toggleOpen = (id) =>
     setOpenMap((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -178,7 +153,27 @@ export default function PotentialDocsPage() {
     setError("");
     try {
       const res = await api.getUnprocessedDocuments({ skip: 0, limit: 200 });
-      setItems(Array.isArray(res) ? res : []);
+      const documents = Array.isArray(res) ? res : [];
+      setItems(documents);
+      
+      // Fetch summaries for all documents
+      const annotationPromises = documents.map(async (doc) => {
+        try {
+          const summaryResponse = await api.getDocumentAnnotation(doc.id);
+          const annotation = summaryResponse?.summary || "";
+          return { id: doc.id, annotation: typeof annotation === "string" ? annotation : "" };
+        } catch (e) {
+          console.warn(`Failed to fetch summary for document ${doc.id}:`, e);
+          return { id: doc.id, annotation: "" };
+        }
+      });
+      
+      const annotationResults = await Promise.all(annotationPromises);
+      const annotationMap = {};
+      annotationResults.forEach(({ id, annotation }) => {
+        annotationMap[id] = annotation;
+      });
+      setAnnotations(annotationMap);
     } catch (e) {
       setError(e?.message || "Не удалось загрузить очередь");
     } finally {
@@ -249,9 +244,9 @@ export default function PotentialDocsPage() {
   const itemsVm = useMemo(() => {
     return items.map((d) => ({
       ...d,
-      _preview: getPreviewText(d),
+      _preview: getPreviewText(d, annotations),
     }));
-  }, [items]);
+  }, [items, annotations]);
 
   return (
     <div className="ec-page">

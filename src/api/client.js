@@ -201,6 +201,11 @@ class ApiClient {
     });
   }
 
+  async getDocumentAnnotation(documentId) {
+    return this._fetch(`/documents/documents/${documentId}/summary`, {
+      method: "GET",
+    });
+  }
 
   
 }

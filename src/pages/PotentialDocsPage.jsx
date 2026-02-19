@@ -132,6 +132,57 @@ function truncate(text, n = 700) {
   return text.slice(0, n).trimEnd() + "…";
 }
 
+/** --- SCORE helpers --- */
+function getScore(doc) {
+  const raw = doc?.score;
+
+  if (raw === null || raw === undefined || raw === "") return null;
+
+  // если вдруг прилетит массив (как в твоём примере score: [])
+  const value = Array.isArray(raw) ? raw[0] : raw;
+
+  const num =
+    typeof value === "number"
+      ? value
+      : parseFloat(String(value).replace(",", "."));
+
+  if (Number.isNaN(num)) return null;
+
+  // clamp 0..10
+  return Math.max(0, Math.min(10, num));
+}
+
+function formatScore(score) {
+  if (score === null || score === undefined) return "—";
+  // если целое — без .0, иначе 1 знак
+  return Number.isInteger(score) ? String(score) : score.toFixed(1);
+}
+
+function scoreBadgeStyle(score) {
+  // серый, если score нет
+  if (score === null || score === undefined) {
+    return {
+      background: "rgba(15,23,42,0.06)",
+      border: "1px solid rgba(15,23,42,0.10)",
+      color: "#374151",
+    };
+  }
+
+  // hue: 0 (red) -> 60 (yellow) -> 120 (green)
+  const hue = (score / 10) * 120;
+  const bg = `hsl(${hue} 85% 45%)`;
+  const bd = `hsl(${hue} 85% 35%)`;
+
+  // на жёлтом лучше тёмный текст
+  const textColor = hue >= 45 && hue <= 80 ? "#111827" : "#ffffff";
+
+  return {
+    background: bg,
+    border: `1px solid ${bd}`,
+    color: textColor,
+  };
+}
+
 export default function PotentialDocsPage() {
   const [items, setItems] = useState([]);
   const [busy, setBusy] = useState({ id: null, action: "" }); // approve|delete|open
@@ -141,6 +192,9 @@ export default function PotentialDocsPage() {
   const [openMap, setOpenMap] = useState({});
   const [fullMap, setFullMap] = useState({});
   const [annotations, setAnnotations] = useState({}); // { documentId: annotationText }
+
+  // сортировка по score
+  const [scoreSortDir, setScoreSortDir] = useState("desc"); // desc|asc
 
   const toggleOpen = (id) =>
     setOpenMap((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -214,7 +268,6 @@ export default function PotentialDocsPage() {
     }
   }
 
-  // ✅ Открыть PDF: берём URL через download-url (S3 presigned) и открываем его
   async function openPdfForDoc(doc) {
     setBusy({ id: doc.id, action: "open" });
     try {
@@ -242,18 +295,41 @@ export default function PotentialDocsPage() {
   }
 
   const itemsVm = useMemo(() => {
-    return items.map((d) => ({
+    const mapped = items.map((d) => ({
       ...d,
       _preview: getPreviewText(d, annotations),
+      _score: getScore(d),
     }));
-  }, [items, annotations]);
+
+    // сортировка по score
+    const dir = scoreSortDir;
+    const valueForSort = (s) => {
+      // без score всегда вниз
+      if (s === null || s === undefined) return dir === "desc" ? -1 : 11;
+      return s;
+    };
+
+    mapped.sort((a, b) => {
+      const av = valueForSort(a._score);
+      const bv = valueForSort(b._score);
+      const diff = av - bv;
+      if (diff === 0) {
+        // tie-break стабильнее: по id (или по created_at если хочешь)
+        return (a.id || 0) - (b.id || 0);
+      }
+      return dir === "asc" ? diff : -diff;
+    });
+
+    return mapped;
+  }, [items, scoreSortDir, annotations]);
 
   return (
     <div className="ec-page">
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h2 className="ec-page__title" style={{ margin: 0 }}>
           Предложенные карточки
         </h2>
+
         <button
           className="btn btn-ghost"
           type="button"
@@ -262,6 +338,18 @@ export default function PotentialDocsPage() {
         >
           {loading ? "Обновляем…" : "Обновить"}
         </button>
+
+        <button
+          className="btn btn-secondary"
+          type="button"
+          onClick={() => setScoreSortDir((d) => (d === "desc" ? "asc" : "desc"))}
+          disabled={loading}
+          style={{ marginLeft: "0.25rem" }}
+          title="Сортировка по score"
+        >
+          Score {scoreSortDir === "desc" ? "↓" : "↑"}
+        </button>
+
         <div style={{ color: "#6b7280", fontSize: 13 }}>
           В очереди: {items.length}
         </div>
@@ -288,6 +376,8 @@ export default function PotentialDocsPage() {
           const shownText = showFull ? doc._preview : truncate(doc._preview, 700);
           const canExpandFull = doc._preview && doc._preview.length > 700;
 
+          const badge = scoreBadgeStyle(doc._score);
+
           return (
             <div
               key={doc.id}
@@ -307,7 +397,7 @@ export default function PotentialDocsPage() {
                 }}
               >
                 {/* левая часть */}
-                <div style={{ minWidth: 0, display: "flex", gap: 10 }}>
+                <div style={{ minWidth: 0, display: "flex", gap: 10, alignItems: "flex-start" }}>
                   <button
                     type="button"
                     className="btn btn-ghost"
@@ -328,6 +418,26 @@ export default function PotentialDocsPage() {
                   >
                     {isOpen ? "▴" : "▾"}
                   </button>
+
+                  {/* SCORE кружок */}
+                  <div
+                    title={doc._score == null ? "Score отсутствует" : `Score: ${formatScore(doc._score)} / 10`}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 999,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontWeight: 800,
+                      fontSize: 13,
+                      lineHeight: 1,
+                      flex: "0 0 auto",
+                      ...badge,
+                    }}
+                  >
+                    {formatScore(doc._score)}
+                  </div>
 
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>

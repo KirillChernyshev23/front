@@ -47,25 +47,32 @@ function isInternalSourceLink(doc) {
   return looksLikeStorageUrl(doc.source_link);
 }
 
-// --- описание/краткий текст (потом можешь заменить на нужное поле) ---
+// --- описание/краткий текст ---
 function getPreviewText(doc) {
-  const candidates = [
-    doc?.summary,
-    doc?.short_description,
-    doc?.description,
-    doc?.abstract,
-    doc?.excerpt,
-    doc?.llm_summary,
-    doc?.metadata?.summary,
-    doc?.metadata?.description,
-    doc?.metadata?.llm_summary,
-    doc?.metadata?.short_description,
-    doc?.full_text,
-    doc?.contents,
-    doc?.text,
-  ];
-  const text = candidates.find((x) => typeof x === "string" && x.trim());
-  return text ? text.trim() : "";
+  const c = doc?.contents;
+
+  // contents как строка (на всякий случай)
+  if (typeof c === "string") return c.trim();
+
+  // contents как массив строк
+  if (Array.isArray(c) && c.length && c.every((x) => typeof x === "string")) {
+    return c.map((x) => x.trim()).filter(Boolean).join("\n\n");
+  }
+
+  // contents как массив объектов
+  if (Array.isArray(c) && c.length) {
+    const pieces = c
+      .map((item) => {
+        if (!item || typeof item !== "object") return "";
+        return item.text || item.content || item.body || item.summary || item.value || "";
+      })
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean);
+
+    return pieces.join("\n\n");
+  }
+
+  return "";
 }
 
 function truncate(text, n = 700) {
@@ -94,6 +101,9 @@ export default function ResultsList({ items, onDelete, isAdmin }) {
 
 function ResultItem({ doc, onDelete, isAdmin }) {
   const typeCfg = DOC_TYPES[doc.kind];
+
+  console.log("doc keys:", Object.keys(doc));
+  console.log("full_text:", doc.full_text, "fullText:", doc.fullText, "contents:", doc.contents);
 
   const docDateField =
     typeCfg?.metadataFields?.find((f) => f.isDocDate) || null;

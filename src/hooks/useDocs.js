@@ -133,6 +133,9 @@ function normalizeFromApi(d) {
 
     metadata,
     extras: metadata,
+    full_text: d.full_text,
+    contents: d.contents,
+
   };
 
   const typeCfg = DOC_TYPES[kind];

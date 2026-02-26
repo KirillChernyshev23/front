@@ -2,6 +2,12 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client";
 
+/**
+ * TODO: поменяй на реальную ручку бэка, когда будет готово
+ * Пример: "/collector/source-suggestions"
+ */
+const SOURCE_SUGGESTION_GET_PATH = "/collector/source-suggestions";
+
 export default function AdminPage({ auth }) {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -14,6 +20,11 @@ export default function AdminPage({ auth }) {
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersError, setUsersError] = useState("");
 
+  // ===== NEW: предложения источников (только ссылка) =====
+  const [sources, setSources] = useState([]);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [sourcesError, setSourcesError] = useState("");
+
   async function loadUsers() {
     try {
       if (!auth?.isAdmin) return;
@@ -22,7 +33,6 @@ export default function AdminPage({ auth }) {
       setUsersError("");
 
       const data = await api.listUsers();
-      // поддерживаем оба варианта ответа: массив или { users: [...] }
       const usersArr = Array.isArray(data)
         ? data
         : Array.isArray(data.users)
@@ -30,7 +40,6 @@ export default function AdminPage({ auth }) {
         : [];
 
       setUsers(usersArr);
-      console.log("USERS FROM API:", usersArr);
     } catch (err) {
       setUsersError(err?.message || "Не удалось загрузить пользователей");
     } finally {
@@ -38,8 +47,43 @@ export default function AdminPage({ auth }) {
     }
   }
 
+  async function loadSourceSuggestions() {
+    try {
+      if (!auth?.isAdmin) return;
+
+      setSourcesLoading(true);
+      setSourcesError("");
+
+      const data = await api._fetch(SOURCE_SUGGESTION_GET_PATH, { method: "GET" });
+
+      // поддержка массива или { items: [...] }
+      const arr = Array.isArray(data)
+        ? data
+        : Array.isArray(data.items)
+        ? data.items
+        : [];
+
+      // оставляем только url, терпим разные ключи
+      const urls = arr
+        .map((x) => x?.url ?? x?.link ?? x?.source_link ?? x?.sourceLink ?? "")
+        .map((u) => String(u || "").trim())
+        .filter(Boolean);
+
+      setSources(urls);
+    } catch (err) {
+      setSourcesError(
+        err?.message ||
+          "Не удалось загрузить предложения."
+      );
+      setSources([]);
+    } finally {
+      setSourcesLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadUsers().catch(() => {});
+    loadSourceSuggestions().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -51,12 +95,7 @@ export default function AdminPage({ auth }) {
     try {
       const role = isAdmin ? "admin" : "user";
 
-      await api.createUser({
-        username,
-        email,
-        password,
-        role,
-      });
+      await api.createUser({ username, email, password, role });
 
       setMessage(`Пользователь "${username}" создан (${role})`);
       setUsername("");
@@ -73,19 +112,13 @@ export default function AdminPage({ auth }) {
   }
 
   async function handleDeleteUser(user) {
-    // пробуем найти хоть какой-то id-подобный ключ
-    const id =
-      user?.id ??
-      user?.user_id ??
-      user?.pk ??
-      null;
+    const id = user?.id ?? user?.user_id ?? user?.pk ?? null;
 
     if (!id) {
       alert(
         "Не удалось определить ID пользователя для удаления.\n" +
           "Посмотри ответ /auth/users: нужно, чтобы там было поле id (или user_id)."
       );
-      console.log("Нет id у пользователя:", user);
       return;
     }
 
@@ -94,9 +127,7 @@ export default function AdminPage({ auth }) {
       return;
     }
 
-    if (!window.confirm(`Удалить пользователя "${user.username}"?`)) {
-      return;
-    }
+    if (!window.confirm(`Удалить пользователя "${user.username}"?`)) return;
 
     try {
       await api.deleteUser(id);
@@ -122,42 +153,21 @@ export default function AdminPage({ auth }) {
 
         <label className="ec-label">
           Логин
-          <input
-            className="ec-input"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
+          <input className="ec-input" value={username} onChange={(e) => setUsername(e.target.value)} required />
         </label>
 
         <label className="ec-label">
           Email
-          <input
-            type="email"
-            className="ec-input"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
+          <input type="email" className="ec-input" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </label>
 
         <label className="ec-label">
           Пароль
-          <input
-            type="password"
-            className="ec-input"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
+          <input type="password" className="ec-input" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
 
         <label className="ec-label ec-label--inline">
-          <input
-            type="checkbox"
-            checked={isAdmin}
-            onChange={(e) => setIsAdmin(e.target.checked)}
-          />{" "}
+          <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} />{" "}
           Сделать администратором
         </label>
 
@@ -167,11 +177,7 @@ export default function AdminPage({ auth }) {
           <button className="btn btn-primary" type="submit" disabled={busy}>
             {busy ? "Создаём…" : "Создать пользователя"}
           </button>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => (window.location.hash = "/")}
-          >
+          <button type="button" className="btn btn-ghost" onClick={() => (window.location.hash = "/")}>
             Назад
           </button>
         </div>
@@ -204,10 +210,7 @@ export default function AdminPage({ auth }) {
                       <td>{u.role}</td>
                       <td>{u.email}</td>
                       <td>
-                        <button
-                          className="btn btn-ghost"
-                          onClick={() => handleDeleteUser(u)}
-                        >
+                        <button className="btn btn-ghost" onClick={() => handleDeleteUser(u)}>
                           Удалить
                         </button>
                       </td>
@@ -215,6 +218,40 @@ export default function AdminPage({ auth }) {
                   ))}
                 </tbody>
               </table>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ===== NEW: предложения источников (только ссылки) ===== */}
+      <div className="ec-auth__card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <h3 className="ec-auth__title" style={{ margin: 0 }}>
+            Предложения источников
+          </h3>
+
+          <button type="button" className="btn btn-ghost" onClick={loadSourceSuggestions} disabled={sourcesLoading}>
+            {sourcesLoading ? "Обновляем…" : "Обновить"}
+          </button>
+        </div>
+
+        {sourcesLoading && <p>Загружаем предложения…</p>}
+        {sourcesError && <p className="ec-auth__error">{sourcesError}</p>}
+
+        {!sourcesLoading && !sourcesError && (
+          <>
+            {sources.length === 0 ? (
+              <p>Предложений пока нет.</p>
+            ) : (
+              <ul style={{ marginTop: 10, paddingLeft: 18 }}>
+                {sources.map((u, idx) => (
+                  <li key={`${u}-${idx}`} style={{ marginBottom: 6 }}>
+                    <a href={u} target="_blank" rel="noreferrer">
+                      {u}
+                    </a>
+                  </li>
+                ))}
+              </ul>
             )}
           </>
         )}

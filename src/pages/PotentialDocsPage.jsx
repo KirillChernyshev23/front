@@ -7,7 +7,7 @@ import { DOC_TYPES, backendTypeToKind } from "../constants/docTypes";
  * TODO: поменяй на реальную ручку бэка, когда будет готово
  * Пример: "/collector/source-suggestions"
  */
-const SOURCE_SUGGESTION_POST_PATH = "/collector/source-suggestions";
+const SOURCE_SUGGESTION_POST_PATH = "/collector/sites";
 
 /** --- helpers (локально, чтобы не зависеть от импортов) --- */
 function ensureAbsoluteUrl(url) {
@@ -114,10 +114,14 @@ function getTags(doc) {
   return [];
 }
 
-// ✅ ОПИСАНИЕ: строго только из contents
-function getPreviewText(doc) {
-  const text = doc?.contents;
-  return typeof text === "string" ? text.trim() : "";
+// ✅ ОПИСАНИЕ: теперь берём из API endpoint /documents/{document_id}/summary
+function getPreviewText(doc, annotations) {
+  if (!doc?.id) return "";
+  const annotation = annotations[doc.id];
+  if (typeof annotation === "string") {
+    return annotation.trim() || "";
+  }
+  return "";
 }
 
 function truncate(text, n = 700) {
@@ -198,7 +202,27 @@ export default function PotentialDocsPage() {
     setError("");
     try {
       const res = await api.getUnprocessedDocuments({ skip: 0, limit: 200 });
-      setItems(Array.isArray(res) ? res : []);
+      const documents = Array.isArray(res) ? res : [];
+      setItems(documents);
+      
+      // Fetch summaries for all documents
+      const annotationPromises = documents.map(async (doc) => {
+        try {
+          const summaryResponse = await api.getDocumentAnnotation(doc.id);
+          const annotation = summaryResponse?.summary || "";
+          return { id: doc.id, annotation: typeof annotation === "string" ? annotation : "" };
+        } catch (e) {
+          console.warn(`Failed to fetch summary for document ${doc.id}:`, e);
+          return { id: doc.id, annotation: "" };
+        }
+      });
+      
+      const annotationResults = await Promise.all(annotationPromises);
+      const annotationMap = {};
+      annotationResults.forEach(({ id, annotation }) => {
+        annotationMap[id] = annotation;
+      });
+      setAnnotations(annotationMap);
     } catch (e) {
       setError(e?.message || "Не удалось загрузить очередь");
     } finally {
@@ -300,7 +324,7 @@ export default function PotentialDocsPage() {
   const itemsVm = useMemo(() => {
     const mapped = items.map((d) => ({
       ...d,
-      _preview: getPreviewText(d),
+      _preview: getPreviewText(d, annotations),
       _score: getScore(d),
     }));
 
@@ -319,7 +343,7 @@ export default function PotentialDocsPage() {
     });
 
     return mapped;
-  }, [items, scoreSortDir]);
+  }, [items, scoreSortDir, annotations]);
 
   return (
     <div className="ec-page">

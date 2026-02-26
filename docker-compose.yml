@@ -1,6 +1,6 @@
 services:
   frontend:
-    container_name: ed-consult-frontend
+    container_name: ed-consult-frontend1
     build:
       context: .
       dockerfile: Dockerfile

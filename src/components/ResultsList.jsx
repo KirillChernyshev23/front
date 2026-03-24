@@ -17,7 +17,6 @@ function formatDateDDMMYYYY(dateStr) {
   return `${dd}.${mm}.${yyyy}`;
 }
 
-// user-friendly: если ввели "site.com", откроем "https://site.com"
 function ensureAbsoluteUrl(url) {
   if (!url) return "";
   const u = String(url).trim();
@@ -27,7 +26,6 @@ function ensureAbsoluteUrl(url) {
   return "https://" + u;
 }
 
-// Похожа ли ссылка на внутреннюю ссылку хранилища (MinIO/S3)?
 function looksLikeStorageUrl(url) {
   if (!url) return false;
   const s = String(url);
@@ -35,22 +33,17 @@ function looksLikeStorageUrl(url) {
   return false;
 }
 
-// Проверяем, что source_link у документа — это ссылка на файл из хранилища,
-// а не внешний интернет-источник
 function isInternalSourceLink(doc) {
   if (!doc?.source_link) return false;
-
   if (Array.isArray(doc.links) && doc.links.length) {
     const match = doc.links.some(
       (l) => l?.s3_key && doc.source_link.includes(l.s3_key)
     );
     if (match) return true;
   }
-
   return looksLikeStorageUrl(doc.source_link);
 }
 
-// --- описание/краткий текст ---
 function getPreviewText(doc) {
   const s = doc?.summary;
   return typeof s === "string" ? s.trim() : "";
@@ -62,30 +55,33 @@ function truncate(text, n = 700) {
   return text.slice(0, n).trimEnd() + "…";
 }
 
-export default function ResultsList({ items, onDelete, isAdmin }) {
-  // ✅ ID документа, для которого открыта модалка (null = закрыта)
+export default function ResultsList({
+  items,
+  onDelete,
+  isAdmin,
+  isAuthenticated,
+}) {
   const [addToProjectDocId, setAddToProjectDocId] = useState(null);
 
-  // ✅ Общий обработчик: либо просим войти, либо открываем модалку
   function handleAddToProject(docId) {
     const token = localStorage.getItem("ec_jwt_token");
-
-    // Если пользователь не залогинен — отправляем на логин
     if (!token) {
-      // запоминаем текущий маршрут, чтобы после логина вернуться сюда
       const desired = window.location.hash.replace("#", "") || "/";
       localStorage.setItem(LAST_ROUTE_AFTER_LOGIN, desired);
       window.location.hash = "/login";
       return;
     }
-
     setAddToProjectDocId(docId);
   }
 
   if (!items.length) {
     return (
       <div className="ec-empty">
-        Ничего не найдено. Измените запрос или фильтры.
+        <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>📄</div>
+        <div style={{ fontWeight: 600 }}>Ничего не найдено</div>
+        <div style={{ color: "#6b7280", marginTop: 4, fontSize: 14 }}>
+          Измените запрос или фильтры
+        </div>
       </div>
     );
   }
@@ -99,37 +95,39 @@ export default function ResultsList({ items, onDelete, isAdmin }) {
             doc={d}
             onDelete={onDelete}
             isAdmin={isAdmin}
-            // ✅ передаём колбэк внутрь карточки
+            isAuthenticated={isAuthenticated}
             onAddToProject={handleAddToProject}
           />
         ))}
       </div>
 
-      {/* ✅ Модалка рендерится один раз на список */}
-      <AddToProjectModal
-        open={addToProjectDocId != null}
-        documentId={addToProjectDocId}
-        onClose={() => setAddToProjectDocId(null)}
-      />
+      {isAuthenticated && (
+        <AddToProjectModal
+          open={addToProjectDocId != null}
+          documentId={addToProjectDocId}
+          onClose={() => setAddToProjectDocId(null)}
+        />
+      )}
     </>
   );
 }
 
-// ✅ ВАЖНО: добавили onAddToProject в пропсы
-function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
+function ResultItem({
+  doc,
+  onDelete,
+  isAdmin,
+  isAuthenticated,
+  onAddToProject,
+}) {
   const typeCfg = DOC_TYPES[doc.kind];
-
   const docDateField =
     typeCfg?.metadataFields?.find((f) => f.isDocDate) || null;
-
   const hasSourceLinkField = !!typeCfg?.metadataFields?.some(
     (f) => f.isSourceLink
   );
-
   const internalSrc = isInternalSourceLink(doc);
   const createdAt = doc.uploadedAt || doc.created_at;
 
-  // --- состояние "шторки" ---
   const previewText = getPreviewText(doc);
   const hasPreview = !!previewText;
   const [isDescOpen, setIsDescOpen] = useState(false);
@@ -137,22 +135,16 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
 
   async function handleOpenFile() {
     try {
-      // ⚠️ у тебя download-url дергается по doc.id — оставляем так
       const res = await api.getDocumentDownloadUrls(doc.id);
       let url = "";
-
       if (Array.isArray(res) && res.length) {
         const first = res[0];
-
-        if (typeof first === "string") {
-          url = first;
-        } else if (first && typeof first === "object") {
+        if (typeof first === "string") url = first;
+        else if (first && typeof first === "object")
           url = first.url || first.download_url || first.href || "";
-        }
       } else if (res && typeof res === "object") {
         url = res.url || res.download_url || res.href || "";
       }
-
       if (url) {
         url = normalizeMinioUrl(url);
         window.open(url, "_blank", "noopener,noreferrer");
@@ -161,7 +153,6 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
     } catch (e) {
       console.error("Не удалось получить download-url:", e);
     }
-
     if (doc.source_link) {
       const url = ensureAbsoluteUrl(normalizeMinioUrl(doc.source_link));
       window.open(url, "_blank", "noopener,noreferrer");
@@ -171,11 +162,8 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
   }
 
   function handleDelete() {
-    if (!isAdmin) return;
-    if (!onDelete) return;
-    if (window.confirm("Удалить документ?")) {
-      onDelete(doc.id);
-    }
+    if (!isAdmin || !onDelete) return;
+    if (window.confirm("Удалить документ?")) onDelete(doc.id);
   }
 
   function handleEdit() {
@@ -183,60 +171,80 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
     window.location.hash = `/edit/${doc.id}`;
   }
 
-  // ✅ обработчик для кнопки "В проект"
   function handleToProject() {
-    // на всякий — используем apiId, если он есть
     const id = doc.apiId ?? doc.id;
     if (!id) return;
-    if (typeof onAddToProject === "function") {
-      onAddToProject(id);
-    }
+    if (typeof onAddToProject === "function") onAddToProject(id);
   }
 
   const shownText = showFull ? previewText : truncate(previewText, 700);
   const canExpandFull = previewText.length > 700;
+  const tags = doc.keywords || [];
 
   return (
     <article className="ec-item">
+      {/* Title row */}
       <div className="ec-item__row1">
         <h3 className="ec-item__title">
-          {doc.title} <span className="kind">{typeCfg?.label || doc.kind}</span>
+          {doc.title}
+          <span className="kind">{typeCfg?.label || doc.kind}</span>
         </h3>
-        <span className="badge">{doc.fileType || "—"}</span>
       </div>
 
+      {/* Meta row */}
       <div className="ec-item__meta">
         {createdAt && (
           <span>
-            Загружено: <b>{new Date(createdAt).toLocaleDateString()}</b>
+            Загружено <b>{new Date(createdAt).toLocaleDateString()}</b>
           </span>
         )}
-        {!!(doc.keywords || []).length && (
+        {docDateField && doc.document_date && (
           <span>
-            Теги:{" "}
-            <b>{(doc.keywords || []).map((k) => `#${k}`).join(", ")}</b>
+            {docDateField.label}{" "}
+            <b>{formatDateDDMMYYYY(doc.document_date)}</b>
           </span>
         )}
       </div>
 
-      <div className="ec-kv">
-        {docDateField && doc.document_date && (
-          <div className="kv">
-            <b>{docDateField.label}:</b>{" "}
-            <span>{formatDateDDMMYYYY(doc.document_date)}</span>
-          </div>
-        )}
+      {/* Tags */}
+      {tags.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 5,
+            marginTop: 8,
+          }}
+        >
+          {tags.map((k) => (
+            <span
+              key={k}
+              style={{
+                fontSize: 11,
+                padding: "3px 9px",
+                borderRadius: 999,
+                background: "rgba(37,99,235,0.06)",
+                border: "1px solid rgba(37,99,235,0.12)",
+                color: "#2563eb",
+                fontWeight: 500,
+              }}
+            >
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
 
+      {/* Metadata fields */}
+      <div className="ec-kv">
         {typeCfg?.metadataFields?.map(
           ({ key, label, isSourceLink, isDocDate, kind }) => {
             if (isDocDate) return null;
             if (isSourceLink) return null;
-
             let value = doc[key];
-            if (value === null || value === undefined || value === "") return null;
-
+            if (value === null || value === undefined || value === "")
+              return null;
             if (kind === "date") value = formatDateDDMMYYYY(value);
-
             return (
               <div className="kv" key={`meta-${key}`}>
                 <b>{label}:</b> <span>{value}</span>
@@ -247,30 +255,33 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
 
         {hasSourceLinkField && doc.source_link && !internalSrc && (
           <div className="kv">
-            <b>Ссылка на интернет-источник:</b>{" "}
+            <b>Источник:</b>{" "}
             <a
               href={ensureAbsoluteUrl(normalizeMinioUrl(doc.source_link))}
               target="_blank"
               rel="noreferrer"
+              style={{ color: "#2563eb" }}
             >
-              {doc.source_link}
+              {doc.source_link.length > 60
+                ? doc.source_link.slice(0, 60) + "…"
+                : doc.source_link}
             </a>
           </div>
         )}
       </div>
 
-      {/* ✅ шторка "Описание" — раскрывается вниз */}
+      {/* Description */}
       {isDescOpen && (
         <div
           style={{
             marginTop: 10,
-            padding: 10,
-            borderRadius: 12,
-            background: "rgba(15,23,42,0.03)",
-            border: "1px solid rgba(15,23,42,0.10)",
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(15,23,42,0.02)",
+            border: "1px solid rgba(15,23,42,0.06)",
             color: "#374151",
             fontSize: 14,
-            lineHeight: 1.45,
+            lineHeight: 1.5,
             whiteSpace: "pre-wrap",
           }}
         >
@@ -282,6 +293,7 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
                   <button
                     type="button"
                     className="btn btn-ghost"
+                    style={{ fontSize: 12, padding: "4px 10px" }}
                     onClick={() => setShowFull((v) => !v)}
                   >
                     {showFull ? "Свернуть" : "Показать полностью"}
@@ -290,13 +302,18 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
               )}
             </>
           ) : (
-            <span style={{ color: "#6b7280" }}>Описание пока недоступно.</span>
+            <span style={{ color: "#9ca3af" }}>Описание пока недоступно.</span>
           )}
         </div>
       )}
 
+      {/* Actions */}
       <div className="ec-item__actions">
-        <button className="btn btn-primary" onClick={handleOpenFile} type="button">
+        <button
+          className="btn btn-primary"
+          onClick={handleOpenFile}
+          type="button"
+        >
           Открыть файл
         </button>
 
@@ -308,17 +325,30 @@ function ResultItem({ doc, onDelete, isAdmin, onAddToProject }) {
           {isDescOpen ? "Скрыть описание" : "Описание"}
         </button>
 
-        {/* ✅ КНОПКА "В ПРОЕКТ" — работает через колбэк из ResultsList */}
-        <button className="btn btn-secondary" type="button" onClick={handleToProject}>
-          В проект
-        </button>
+        {isAuthenticated && (
+          <button
+            className="btn btn-secondary"
+            type="button"
+            onClick={handleToProject}
+          >
+            В проект
+          </button>
+        )}
 
         {isAdmin && (
           <>
-            <button className="btn btn-secondary" onClick={handleEdit} type="button">
+            <button
+              className="btn btn-secondary"
+              onClick={handleEdit}
+              type="button"
+            >
               Редактировать
             </button>
-            <button className="btn btn-ghost" onClick={handleDelete} type="button">
+            <button
+              className="btn btn-ghost"
+              onClick={handleDelete}
+              type="button"
+            >
               Удалить
             </button>
           </>

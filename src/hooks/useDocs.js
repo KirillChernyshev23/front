@@ -1,5 +1,5 @@
 // src/hooks/useDocs.js
-import { useEffect, useMemo, useReducer } from "react";
+import { useEffect, useMemo, useReducer, useCallback } from "react";
 import { api } from "../api/client";
 import { buildMinioUrl, revokeBlob } from "../utils/docUtils";
 import {
@@ -12,6 +12,8 @@ const initialState = {
   route: "list",
   docs: [],
   query: "",
+  searchTrigger: 0,
+  isSearchResult: false,
   filters: {
     kind: "",
     keywords: [],
@@ -31,7 +33,9 @@ function reducer(state, action) {
     case "NAVIGATE":
       return { ...state, route: action.route };
     case "SET_QUERY":
-      return { ...state, query: action.value, page: 1 };
+      return { ...state, query: action.value };
+    case "TRIGGER_SEARCH":
+      return { ...state, searchTrigger: state.searchTrigger + 1, isSearchResult: !!state.query.trim(), page: 1 };
     case "SET_FILTER":
       return {
         ...state,
@@ -61,7 +65,7 @@ function reducer(state, action) {
         },
       };
     case "CLEAR_FILTERS":
-      return { ...state, filters: initialState.filters, query: "", page: 1 };
+      return { ...state, filters: initialState.filters, query: "", isSearchResult: false, page: 1, searchTrigger: state.searchTrigger + 1 };
     case "SET_SORT":
       return { ...state, sort: action.value, page: 1 };
     case "SET_PAGE":
@@ -155,60 +159,45 @@ export function useDocs(authToken) {
   const [s, dispatch] = useReducer(reducer, initialState);
 
   // hash-роутинг
-// hash-роутинг
-useEffect(() => {
-  const applyHash = () => {
-    // Берём hash без '#'
-    const raw = (window.location.hash || "").replace("#", "");
+  useEffect(() => {
+    const applyHash = () => {
+      const raw = (window.location.hash || "").replace("#", "");
+      const hash = raw.replace(/\/+$/, "") || "/";
 
-    // Нормализуем путь:
-    // - убираем хвостовые "/" (например "/workspace/" -> "/workspace")
-    // - если пусто, считаем что это главная "/"
-    const hash = raw.replace(/\/+$/, "") || "/";
-
-    if (hash === "/add") {
-      dispatch({ type: "NAVIGATE", route: "add" });
-
-    } else if (hash === "/login") {
-      dispatch({ type: "NAVIGATE", route: "login" });
-
-    } else if (hash === "/admin") {
-      dispatch({ type: "NAVIGATE", route: "admin" });
-
-    } else if (hash === "/analytics") {
-      dispatch({ type: "NAVIGATE", route: "analytics" });
-
-    } else if (hash === "/workspace") {
-      // ✅ НОВЫЙ РОУТ: страница рабочего пространства
-      dispatch({ type: "NAVIGATE", route: "workspace" });
-
-    } else if (hash === "/potential") {
-      dispatch({ type: "NAVIGATE", route: "potential" });
-
-    } else if (hash.startsWith("/potential/edit/")) {
-      const parts = hash.split("/");
-      const id = parts[3];
-      if (id) dispatch({ type: "NAVIGATE", route: `potential_edit:${id}` });
-      else dispatch({ type: "NAVIGATE", route: "potential" });
-
-    } else if (hash.startsWith("/edit/")) {
-      const parts = hash.split("/");
-      const id = parts[2];
-      if (id) {
-        dispatch({ type: "NAVIGATE", route: `edit:${id}` });
+      if (hash === "/add") {
+        dispatch({ type: "NAVIGATE", route: "add" });
+      } else if (hash === "/login") {
+        dispatch({ type: "NAVIGATE", route: "login" });
+      } else if (hash === "/admin") {
+        dispatch({ type: "NAVIGATE", route: "admin" });
+      } else if (hash === "/analytics") {
+        dispatch({ type: "NAVIGATE", route: "analytics" });
+      } else if (hash === "/workspace") {
+        dispatch({ type: "NAVIGATE", route: "workspace" });
+      } else if (hash === "/potential") {
+        dispatch({ type: "NAVIGATE", route: "potential" });
+      } else if (hash.startsWith("/potential/edit/")) {
+        const parts = hash.split("/");
+        const id = parts[3];
+        if (id) dispatch({ type: "NAVIGATE", route: `potential_edit:${id}` });
+        else dispatch({ type: "NAVIGATE", route: "potential" });
+      } else if (hash.startsWith("/edit/")) {
+        const parts = hash.split("/");
+        const id = parts[2];
+        if (id) {
+          dispatch({ type: "NAVIGATE", route: `edit:${id}` });
+        } else {
+          dispatch({ type: "NAVIGATE", route: "list" });
+        }
       } else {
         dispatch({ type: "NAVIGATE", route: "list" });
       }
+    };
 
-    } else {
-      dispatch({ type: "NAVIGATE", route: "list" });
-    }
-  };
-
-  applyHash();
-  window.addEventListener("hashchange", applyHash);
-  return () => window.removeEventListener("hashchange", applyHash);
-}, []);
+    applyHash();
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, []);
 
   // загрузка списка (в том числе гибридный поиск)
   const reload = async ({ query } = {}) => {
@@ -226,69 +215,106 @@ useEffect(() => {
     dispatch({ type: "INIT", docs });
   };
 
-  // подгружаем документы при логине и при изменении query
+  // Начальная загрузка при логине / монтировании
   useEffect(() => {
+    reload().catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken]);
+
+  // Поиск по явному триггеру (кнопка / Enter)
+  useEffect(() => {
+    if (s.searchTrigger === 0) return; // пропускаем начальное значение
     reload({ query: s.query }).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, s.query]);
+  }, [s.searchTrigger]);
+
+  /** Вызвать поиск вручную (для кнопки / Enter) */
+  const doSearch = useCallback(() => {
+    dispatch({ type: "TRIGGER_SEARCH" });
+  }, []);
 
   const vm = useMemo(() => {
     let list = s.docs.slice();
 
-    const f = s.filters;
+    const hasSearchQuery = s.isSearchResult;
 
-    if (f.kind) list = list.filter((d) => d.kind === f.kind);
+    // Фронтовые фильтры применяем только при обычном просмотре без поиска.
+    // При поиске бэкенд сам отбирает и ранжирует результаты.
+    if (!hasSearchQuery) {
+      const f = s.filters;
 
-    if (f.keywords.length) {
-      const kw = f.keywords.map((x) => x.toLowerCase());
-      list = list.filter((d) => {
-        const dk = (d.keywords || []).map((x) => x.toLowerCase());
-        return kw.every((k) => dk.includes(k));
-      });
-    }
+      if (f.kind) list = list.filter((d) => d.kind === f.kind);
 
-    if (f.uploadedFrom)
-      list = list.filter(
-        (d) => new Date(d.uploadedAt) >= new Date(f.uploadedFrom)
-      );
-    if (f.uploadedTo)
-      list = list.filter(
-        (d) => new Date(d.uploadedAt) <= new Date(f.uploadedTo)
-      );
-    if (f.accessLevel)
-      list = list.filter((d) => d.accessLevel === f.accessLevel);
-
-    if (f.kind) {
-      const metadataFields = DOC_TYPES[f.kind]?.metadataFields || [];
-      metadataFields.forEach(({ key }) => {
-        const value = (f[key] || "").trim();
-        if (!value) return;
-        const needle = value.toLowerCase();
+      if (f.keywords.length) {
+        const kw = f.keywords.map((x) => x.toLowerCase());
         list = list.filter((d) => {
-          const hay =
-            (d[key] !== undefined
-              ? String(d[key])
-              : d.metadata?.[key] || "")?.toLowerCase() || "";
-          return hay.includes(needle);
+          const dk = (d.keywords || []).map((x) => x.toLowerCase());
+          return kw.every((k) => dk.includes(k));
         });
+      }
+
+      if (f.uploadedFrom)
+        list = list.filter(
+          (d) => new Date(d.uploadedAt) >= new Date(f.uploadedFrom)
+        );
+      if (f.uploadedTo)
+        list = list.filter(
+          (d) => new Date(d.uploadedAt) <= new Date(f.uploadedTo)
+        );
+      if (f.accessLevel)
+        list = list.filter((d) => d.accessLevel === f.accessLevel);
+
+      if (f.kind) {
+        const metadataFields = DOC_TYPES[f.kind]?.metadataFields || [];
+        metadataFields.forEach(({ key, kind: fieldKind }) => {
+          if (fieldKind === "date") {
+            // Интервал дат: key_from и key_to
+            const fromVal = (f[`${key}_from`] || "").trim();
+            const toVal = (f[`${key}_to`] || "").trim();
+            if (!fromVal && !toVal) return;
+
+            list = list.filter((d) => {
+              const raw = d[key] !== undefined ? d[key] : d.metadata?.[key];
+              if (!raw) return false;
+              const docDate = new Date(raw);
+              if (Number.isNaN(docDate.getTime())) return false;
+
+              if (fromVal && docDate < new Date(fromVal)) return false;
+              // toVal включительно — до конца дня
+              if (toVal && docDate > new Date(toVal + "T23:59:59")) return false;
+              return true;
+            });
+          } else {
+            const value = (f[key] || "").trim();
+            if (!value) return;
+            const needle = value.toLowerCase();
+            list = list.filter((d) => {
+              const hay =
+                (d[key] !== undefined
+                  ? String(d[key])
+                  : d.metadata?.[key] || "")?.toLowerCase() || "";
+              return hay.includes(needle);
+            });
+          }
+        });
+      }
+
+      const { by, dir } = s.sort;
+      list.sort((a, b) => {
+        const av = a[by],
+          bv = b[by];
+        const cmp =
+          by === "uploadedAt" || by === "document_date"
+            ? new Date(av || 0).getTime() -
+              new Date(bv || 0).getTime()
+            : String(av || "").localeCompare(
+                String(bv || ""),
+                "ru",
+                { sensitivity: "base" }
+              );
+        return dir === "asc" ? cmp : -cmp;
       });
     }
-
-    const { by, dir } = s.sort;
-    list.sort((a, b) => {
-      const av = a[by],
-        bv = b[by];
-      const cmp =
-        by === "uploadedAt" || by === "document_date"
-          ? new Date(av || 0).getTime() -
-            new Date(bv || 0).getTime()
-          : String(av || "").localeCompare(
-              String(bv || ""),
-              "ru",
-              { sensitivity: "base" }
-            );
-      return dir === "asc" ? cmp : -cmp;
-    });
 
     const total = list.length;
     const start = (s.page - 1) * s.pageSize;
@@ -304,5 +330,5 @@ useEffect(() => {
     };
   }, [s]);
 
-  return { state: vm, dispatch, reload };
+  return { state: vm, dispatch, reload, doSearch };
 }

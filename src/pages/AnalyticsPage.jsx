@@ -11,13 +11,14 @@ import {
   Tooltip,
   ResponsiveContainer,
   LabelList,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
 
 // ===== DEMO TOGGLE =====
-// Если хочешь посмотреть облако без бэка — поставь true
 const FORCE_TAGS_DEMO = false;
 
-// ===== DEMO DATA =====
 const MOCK_TOP_TAGS = [
   { tag: "интересно", count: 120 },
   { tag: "удобно", count: 70 },
@@ -41,23 +42,29 @@ const MOCK_TOP_TAGS = [
   { tag: "времяпрепровождение", count: 15 },
 ];
 
+// ---------- Палитра ----------
+const PIE_COLORS = [
+  "#1a1a2e", "#c4956a", "#4f7cac", "#6b7280", "#b07d52",
+  "#374151", "#8b5e34", "#5b8fb9", "#9ca3af", "#d4a574",
+];
+
+const TAG_GRADIENT = ["#c4956a", "#b07d52"];
+const TYPE_GRADIENT = ["#1a1a2e", "#374151"];
+const MONTH_GRADIENT = ["#4f7cac", "#3a6a9a"];
+
 // ---------- helpers: months ----------
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
-// "2025-12-01" / "2025-12" / ISO-date -> "YYYY-MM"
 function monthKeyFromLabel(label) {
   if (!label) return null;
-
   const m = String(label).match(/^(\d{4})-(\d{2})/);
   if (m) return `${m[1]}-${m[2]}`;
-
   const d = new Date(label);
   if (!Number.isNaN(d.getTime())) {
     return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
   }
-
   return null;
 }
 
@@ -71,7 +78,6 @@ function monthLabelFromDate(date) {
 function lastNMonths(n = 6) {
   const now = new Date();
   const base = new Date(now.getFullYear(), now.getMonth(), 1);
-
   const arr = [];
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
@@ -86,7 +92,6 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-// детерминированный hash (чтобы “хаос” и цвета были стабильны)
 function hashString(str) {
   let h = 2166136261;
   const s = String(str || "");
@@ -98,10 +103,8 @@ function hashString(str) {
 }
 
 const CLOUD_PALETTE = [
-  ["#60a5fa", "#3b82f6"],
-  ["#3b82f6", "#2563eb"],
-  ["#2563eb", "#1d4ed8"],
-  ["#1d4ed8", "#1e40af"], // deep blue
+  "#1a1a2e", "#c4956a", "#4f7cac", "#b07d52",
+  "#374151", "#6b7280", "#8b5e34", "#5b8fb9",
 ];
 
 function TagCloud({ items }) {
@@ -110,19 +113,19 @@ function TagCloud({ items }) {
   return (
     <div
       style={{
-        border: "1px solid #e5e7eb",
+        border: "1px solid rgba(26,26,46,0.08)",
         borderRadius: 14,
-        padding: 14,
-        background: "#fff",
+        padding: 18,
+        background: "rgba(255,255,255,0.6)",
+        backdropFilter: "blur(8px)",
       }}
     >
       <div
         style={{
           display: "flex",
           flexWrap: "wrap",
-          gap: "14px 14px",
+          gap: "12px 12px",
           alignItems: "center",
-          alignContent: "flex-start",
           justifyContent: "flex-start",
         }}
       >
@@ -135,27 +138,18 @@ function TagCloud({ items }) {
               alignItems: "center",
               justifyContent: "center",
               whiteSpace: "nowrap",
-
-              // кирпич
               padding: `${w.padY}px ${w.padX}px`,
               borderRadius: w.radius,
               fontSize: w.fontSize,
               fontWeight: w.fontWeight,
               lineHeight: 1,
-
-              // ✅ полная заливка
               background: w.bg,
               color: w.fg,
-
-              // ✅ чуть объёма
-              border: "1px solid rgba(15,23,42,0.08)",
+              border: "1px solid rgba(26,26,46,0.06)",
               boxShadow: w.shadow,
-
-              // ✅ “хаос” без вращения
               transform: `translateY(${w.lift}px)`,
-              transformOrigin: "center",
-
               userSelect: "none",
+              transition: "transform 0.2s ease, box-shadow 0.2s ease",
             }}
           >
             {w.tag}
@@ -166,7 +160,80 @@ function TagCloud({ items }) {
   );
 }
 
-export default function AnalyticsPage({ auth }) {
+// ---------- Custom tooltip ----------
+function CustomTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid rgba(26,26,46,0.1)",
+        borderRadius: 10,
+        padding: "10px 14px",
+        boxShadow: "0 8px 24px rgba(26,26,46,0.1)",
+        fontSize: 13,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "#1a1a2e" }}>
+        {label}
+      </div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: "#6b7280" }}>
+          {p.name}: <b style={{ color: "#1a1a2e" }}>{p.value}</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- Stat card ----------
+function StatCard({ label, value, accent = false }) {
+  return (
+    <div
+      style={{
+        padding: "20px 24px",
+        borderRadius: 14,
+        background: accent
+          ? "linear-gradient(135deg, #1a1a2e, #2a2a40)"
+          : "rgba(255,255,255,0.7)",
+        border: accent ? "none" : "1px solid rgba(26,26,46,0.08)",
+        backdropFilter: accent ? "none" : "blur(8px)",
+        boxShadow: accent
+          ? "0 8px 24px rgba(26,26,46,0.15)"
+          : "0 2px 8px rgba(26,26,46,0.04)",
+        minWidth: 160,
+        transition: "transform 0.2s ease, box-shadow 0.2s ease",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          color: accent ? "rgba(255,255,255,0.6)" : "#6b7280",
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: "'DM Serif Display', Georgia, serif",
+          fontSize: 32,
+          fontWeight: 400,
+          color: accent ? "#fff" : "#1a1a2e",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// ===================== Main component =====================
+
+export default function AnalyticsPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -175,7 +242,9 @@ export default function AnalyticsPage({ auth }) {
     setLoading(true);
     setError("");
     try {
-      const res = refresh ? await api.refreshDashboard() : await api.getDashboard();
+      const res = refresh
+        ? await api.refreshDashboard()
+        : await api.getDashboard();
       setData(res);
     } catch (err) {
       setError(err?.message || "Не удалось загрузить статистику");
@@ -189,9 +258,9 @@ export default function AnalyticsPage({ auth }) {
   }, []);
 
   const totals = data?.totals || {};
-  const totalDocuments = totals.total_documents || 0;
+  const totalDocuments = totals.processed_documents || 0;
 
-  // ---------- ДАННЫЕ ДЛЯ ДИАГРАММЫ ПО ТИПАМ ----------
+  // ---------- По типам ----------
   const rawByType = data?.classification?.by_type || [];
 
   const countsByLabel = useMemo(() => {
@@ -210,7 +279,6 @@ export default function AnalyticsPage({ auth }) {
     const arr = Object.entries(DOC_TYPES).map(([kindKey, cfg]) => {
       const backendLabel = cfg.backendType || cfg.label || kindKey;
       const count = countsByLabel.get(backendLabel) || 0;
-
       return {
         kind: kindKey,
         rawLabel: backendLabel,
@@ -225,7 +293,6 @@ export default function AnalyticsPage({ auth }) {
       if (!label) return;
       const already = arr.some((t) => t.rawLabel === label);
       if (already) return;
-
       const fallbackKind = backendTypeToKind(label);
       arr.push({
         kind: fallbackKind,
@@ -238,7 +305,12 @@ export default function AnalyticsPage({ auth }) {
     return arr;
   }, [countsByLabel, rawByType]);
 
-  // ---------- ДАННЫЕ ДЛЯ ДИАГРАММЫ ПО МЕСЯЦАМ (последние 6) ----------
+  // Данные для pie chart
+  const pieData = useMemo(() => {
+    return byType.filter((t) => t.count > 0);
+  }, [byType]);
+
+  // ---------- По месяцам ----------
   const rawByMonth = data?.ingestion?.documents_by_month || [];
 
   const byMonth = useMemo(() => {
@@ -248,9 +320,7 @@ export default function AnalyticsPage({ auth }) {
       if (!key) return;
       monthMap.set(key, (monthMap.get(key) || 0) + (it?.count || 0));
     });
-
     const months = lastNMonths(6);
-
     return months.map((m) => ({
       key: m.key,
       monthLabel: m.monthLabel,
@@ -258,9 +328,11 @@ export default function AnalyticsPage({ auth }) {
     }));
   }, [rawByMonth]);
 
-  // ---------- ДАННЫЕ ДЛЯ ТОП-10 ТЕГОВ ----------
+  // ---------- Топ-10 тегов ----------
   const topTags = useMemo(() => {
-    const arr = FORCE_TAGS_DEMO ? MOCK_TOP_TAGS : data?.tags?.top_tags || [];
+    const arr = FORCE_TAGS_DEMO
+      ? MOCK_TOP_TAGS
+      : data?.tags?.top_tags || [];
     return (Array.isArray(arr) ? arr : [])
       .filter((x) => x?.tag)
       .map((x) => ({ tag: String(x.tag), count: x.count || 0 }))
@@ -268,16 +340,11 @@ export default function AnalyticsPage({ auth }) {
       .slice(0, 10);
   }, [data]);
 
-  const topTagsChart = useMemo(() => {
-    return topTags.map((t) => ({
-      ...t,
-      tagShort: t.tag.length > 18 ? t.tag.slice(0, 18) + "…" : t.tag,
-    }));
-  }, [topTags]);
-
-  // ---------- ОБЛАКО ТЕГОВ (кирпичики, линейная пропорция size ~ count) ----------
+  // ---------- Облако тегов ----------
   const tagCloudItems = useMemo(() => {
-    const src = FORCE_TAGS_DEMO ? MOCK_TOP_TAGS : data?.tags?.top_tags || [];
+    const src = FORCE_TAGS_DEMO
+      ? MOCK_TOP_TAGS
+      : data?.tags?.top_tags || [];
 
     const clean = (Array.isArray(src) ? src : [])
       .filter((x) => x?.tag)
@@ -288,47 +355,30 @@ export default function AnalyticsPage({ auth }) {
 
     if (!clean.length) return [];
 
-    // ✅ линейная пропорция: берём baseline = минимальный count в выборке
-    // Тогда count в 3 раза больше => кирпич примерно в 3 раза больше
     const minCount = Math.max(1, clean[clean.length - 1].count);
-
-    // чтобы совсем огромные не “сломали” страницу — оставим высокий предел
-    // (3x, 4x, 5x будет сохраняться, если не упирается в cap)
-    const MAX_K = 10;
-
-    // базовые размеры (минимальный тег)
-    const BASE_FONT = 16;
+    const MAX_K = 8;
+    const BASE_FONT = 15;
     const BASE_PAD_X = 14;
-    const BASE_PAD_Y = 9;
+    const BASE_PAD_Y = 8;
 
     return clean.map((t) => {
       const h = hashString(t.tag);
-
-      const kRaw = t.count / minCount; // ✅ строго пропорционально count
+      const kRaw = t.count / minCount;
       const k = clamp(kRaw, 1, MAX_K);
 
-      // размеры кирпича (всё линейно => “в 3 раза count -> в 3 раза size”)
       const fontSize = Math.round(BASE_FONT * k);
       const padX = Math.round(BASE_PAD_X * k);
       const padY = Math.round(BASE_PAD_Y * k);
+      const lift = ((h >>> 7) % 7) - 3;
+      const radius = 10 + ((h >>> 16) % 14);
 
-      // немного хаоса без вращения
-      const lift = ((h >>> 7) % 9) - 4; // -4..+4
-      const radius = 12 + ((h >>> 16) % 18); // 12..29
+      const color = CLOUD_PALETTE[h % CLOUD_PALETTE.length];
+      const bg = color;
+      const fg = "rgba(255,255,255,0.95)";
 
-      // цвета/градиент
-      const c1 = CLOUD_PALETTE[h % CLOUD_PALETTE.length];
-      const c2 = CLOUD_PALETTE[(h + 3) % CLOUD_PALETTE.length];
-      const dir = (h % 3) === 0 ? "135deg" : (h % 3) === 1 ? "45deg" : "90deg";
-      const bg = `linear-gradient(${dir}, ${c1}, ${c2})`;
-      const fg = "rgba(255,255,255,0.97)";
-
-      // тень чуть сильнее у больших
-      const shadowAlpha = 0.12 + Math.min(0.12, (k - 1) * 0.02);
-      const shadow = `0 10px 24px rgba(15,23,42,${shadowAlpha})`;
-
-      // вес шрифта чуть растёт у крупных
-      const fontWeight = k >= 3 ? 900 : k >= 2 ? 800 : 700;
+      const shadowAlpha = 0.08 + Math.min(0.1, (k - 1) * 0.015);
+      const shadow = `0 6px 20px rgba(26,26,46,${shadowAlpha})`;
+      const fontWeight = k >= 3 ? 800 : k >= 2 ? 700 : 600;
 
       return {
         ...t,
@@ -345,242 +395,382 @@ export default function AnalyticsPage({ auth }) {
     });
   }, [data]);
 
+  // ---------- Сводка по типам для карточек ----------
+  const typeStats = useMemo(() => {
+    return byType.filter((t) => t.count > 0).sort((a, b) => b.count - a.count);
+  }, [byType]);
+
   return (
-    <div className="ec-page">
-      <h2 className="ec-page__title">Статистика по документам</h2>
+    <div style={{ padding: "8px 0", maxWidth: 1100, margin: "0 auto" }}>
+      <h2
+        style={{
+          fontFamily: "'DM Serif Display', Georgia, serif",
+          fontSize: 28,
+          fontWeight: 400,
+          margin: "0 0 24px",
+        }}
+      >
+        Статистика
+      </h2>
 
       {error && (
-        <div className="ec-alert ec-alert--error">
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            borderRadius: 12,
+            padding: "12px 16px",
+            marginBottom: 20,
+            color: "#b91c1c",
+            fontSize: 14,
+          }}
+        >
           <div>{error}</div>
           <button
             type="button"
             className="btn btn-ghost"
             onClick={() => loadDashboard({ refresh: true })}
             disabled={loading}
-            style={{ marginTop: "0.5rem" }}
+            style={{ marginTop: 8 }}
           >
             Попробовать ещё раз
           </button>
         </div>
       )}
 
-      {loading && !data && <p>Загружаем статистику…</p>}
+      {loading && !data && (
+        <p style={{ color: "#6b7280" }}>Загружаем статистику…</p>
+      )}
 
       {data && (
         <>
-          {/* Общее количество документов */}
-          <section className="ec-analytics__section">
-            <h3>Общее количество документов</h3>
-            <div className="ec-analytics__totals">
-              <div className="ec-analytics__card ec-analytics__card--big">
-                <div className="ec-analytics__card-label">Всего в базе</div>
-                <div className="ec-analytics__card-value ec-analytics__card-value--accent">
-                  {totalDocuments}
-                </div>
-              </div>
-            </div>
-          </section>
+          {/* ========== Карточки ========== */}
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              flexWrap: "wrap",
+              marginBottom: 28,
+            }}
+          >
+            <StatCard
+              label="Всего документов"
+              value={totalDocuments}
+              accent
+            />
+            {typeStats.slice(0, 4).map((t) => (
+              <StatCard
+                key={t.kind}
+                label={t.typeLabel}
+                value={t.count}
+              />
+            ))}
+          </div>
 
-          {/* Столбчатая диаграмма по типам */}
-          <section className="ec-analytics__section">
-            <h3>Документы по типам</h3>
+          {/* ========== Типы: pie + bar ========== */}
+          <section style={{ marginBottom: 28 }}>
+            <h3
+              style={{
+                fontFamily: "'DM Serif Display', Georgia, serif",
+                fontSize: 20,
+                fontWeight: 400,
+                margin: "0 0 14px",
+              }}
+            >
+              Документы по типам
+            </h3>
+
             {byType.length === 0 ? (
-              <p>Пока нет данных по типам документов.</p>
+              <p style={{ color: "#6b7280" }}>Пока нет данных.</p>
             ) : (
-              <div className="ec-analytics__chart-container">
-                <ResponsiveContainer width="100%" height={330}>
-                  <BarChart
-                    data={byType}
-                    margin={{ top: 20, right: 20, left: 0, bottom: 40 }}
-                    barCategoryGap={30}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "280px 1fr",
+                  gap: 16,
+                  alignItems: "start",
+                }}
+              >
+                {/* Pie chart */}
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.7)",
+                    backdropFilter: "blur(8px)",
+                    border: "1px solid rgba(26,26,46,0.08)",
+                    borderRadius: 14,
+                    padding: "16px 8px",
+                  }}
+                >
+                  <ResponsiveContainer width="100%" height={260}>
+                    <PieChart>
+                      <Pie
+                        data={pieData}
+                        dataKey="count"
+                        nameKey="typeLabel"
+                        cx="50%"
+                        cy="50%"
+                        outerRadius={100}
+                        innerRadius={50}
+                        paddingAngle={2}
+                        stroke="none"
+                      >
+                        {pieData.map((_, i) => (
+                          <Cell
+                            key={i}
+                            fill={PIE_COLORS[i % PIE_COLORS.length]}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<CustomTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+
+                  {/* Легенда */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                      padding: "0 12px",
+                    }}
                   >
-                    <defs>
-                      <linearGradient id="ecTypesGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#4f46e5" stopOpacity={0.95} />
-                        <stop offset="100%" stopColor="#2563eb" stopOpacity={0.9} />
-                      </linearGradient>
-                    </defs>
+                    {pieData.map((t, i) => (
+                      <div
+                        key={t.kind}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontSize: 12,
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: 3,
+                            background:
+                              PIE_COLORS[i % PIE_COLORS.length],
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span style={{ color: "#6b7280", flex: 1 }}>
+                          {t.typeLabel}
+                        </span>
+                        <b style={{ color: "#1a1a2e" }}>{t.count}</b>
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-
-                    <XAxis
-                      dataKey="typeLabel"
-                      interval={0}
-                      angle={-20}
-                      textAnchor="end"
-                      height={70}
-                      tick={{ fill: "#4b5563", fontSize: 14 }}
-                    />
-
-                    <YAxis
-                      allowDecimals={false}
-                      tick={{ fill: "#4b5563", fontSize: 12 }}
-                      label={{
-                        value: "Количество документов",
-                        angle: -90,
-                        position: "insideLeft",
-                        offset: 10,
-                        style: {
-                          fill: "#6b7280",
-                          fontSize: 14,
-                          textAnchor: "middle",
-                        },
-                      }}
-                    />
-
-                    <Tooltip
-                      cursor={{ fill: "rgba(37,99,235,0.04)" }}
-                      contentStyle={{
-                        borderRadius: 8,
-                        borderColor: "#e5e7eb",
-                        boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
-                      }}
-                    />
-
-                    <Bar
-                      dataKey="count"
-                      name="Количество документов"
-                      fill="url(#ecTypesGradient)"
-                      radius={[8, 8, 2, 2]}
+                {/* Bar chart */}
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.7)",
+                    backdropFilter: "blur(8px)",
+                    border: "1px solid rgba(26,26,46,0.08)",
+                    borderRadius: 14,
+                    padding: 16,
+                  }}
+                >
+                  <ResponsiveContainer width="100%" height={380}>
+                    <BarChart
+                      data={byType}
+                      margin={{ top: 10, right: 20, left: 10, bottom: 60 }}
+                      barCategoryGap={20}
                     >
-                      <LabelList dataKey="count" position="insideMiddle" offset={8} fill="#ffffff" fontSize={18} />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                      <defs>
+                        <linearGradient id="typeGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={TYPE_GRADIENT[0]} />
+                          <stop offset="100%" stopColor={TYPE_GRADIENT[1]} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(26,26,46,0.06)" vertical={false} />
+                      <XAxis
+                        dataKey="typeLabel"
+                        interval={0}
+                        angle={-30}
+                        textAnchor="end"
+                        height={80}
+                        tick={{ fill: "#6b7280", fontSize: 12 }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tick={{ fill: "#6b7280", fontSize: 12 }}
+                      />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Bar
+                        dataKey="count"
+                        name="Документов"
+                        fill="url(#typeGrad)"
+                        radius={[6, 6, 0, 0]}
+                      >
+                        <LabelList
+                          dataKey="count"
+                          position="insideTop"
+                          offset={-20}
+                          fill="#1a1a2e"
+                          fontSize={13}
+                          fontWeight={700}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             )}
           </section>
 
-          {/* Столбчатая диаграмма по месяцам (последние 6) */}
-          <section className="ec-analytics__section">
-            <h3>Динамика загрузки по месяцам (последние 6)</h3>
-            <div className="ec-analytics__chart-container">
-              <ResponsiveContainer width="100%" height={330}>
+          {/* ========== Динамика по месяцам ========== */}
+          <section style={{ marginBottom: 28 }}>
+            <h3
+              style={{
+                fontFamily: "'DM Serif Display', Georgia, serif",
+                fontSize: 20,
+                fontWeight: 400,
+                margin: "0 0 14px",
+              }}
+            >
+              Динамика загрузки за последние 6 месяцев
+            </h3>
+            <div
+              style={{
+                background: "rgba(255,255,255,0.7)",
+                backdropFilter: "blur(8px)",
+                border: "1px solid rgba(26,26,46,0.08)",
+                borderRadius: 14,
+                padding: 16,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={byMonth}
-                  margin={{ top: 20, right: 20, left: 0, bottom: 40 }}
+                  margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
                   barCategoryGap={25}
                 >
                   <defs>
-                    <linearGradient id="ecMonthsGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.95} />
-                      <stop offset="100%" stopColor="#16a34a" stopOpacity={0.9} />
+                    <linearGradient id="monthGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={MONTH_GRADIENT[0]} />
+                      <stop offset="100%" stopColor={MONTH_GRADIENT[1]} />
                     </linearGradient>
                   </defs>
-
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(26,26,46,0.06)" vertical={false} />
                   <XAxis
                     dataKey="monthLabel"
-                    interval={0}
-                    angle={-20}
-                    textAnchor="end"
-                    height={70}
-                    tick={{ fill: "#4b5563", fontSize: 14 }}
+                    tick={{ fill: "#6b7280", fontSize: 13 }}
                   />
-
                   <YAxis
                     allowDecimals={false}
-                    tick={{ fill: "#4b5563", fontSize: 14 }}
-                    label={{
-                      value: "Количество документов",
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: 10,
-                      style: {
-                        fill: "#6b7280",
-                        fontSize: 12,
-                        textAnchor: "middle",
-                      },
-                    }}
+                    tick={{ fill: "#6b7280", fontSize: 12 }}
                   />
-
-                  <Tooltip
-                    cursor={{ fill: "rgba(16,185,129,0.04)" }}
-                    contentStyle={{
-                      borderRadius: 8,
-                      borderColor: "#e5e7eb",
-                      boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
-                    }}
-                  />
-
-                  <Bar dataKey="count" name="Количество документов" fill="url(#ecMonthsGradient)" radius={[8, 8, 2, 2]}>
-                    <LabelList dataKey="count" position="insideMiddle" offset={8} fill="#ffffff" fontSize={18} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar
+                    dataKey="count"
+                    name="Документов"
+                    fill="url(#monthGrad)"
+                    radius={[6, 6, 0, 0]}
+                  >
+                    <LabelList
+                      dataKey="count"
+                      position="top"
+                      offset={6}
+                      fill="#1a1a2e"
+                      fontSize={14}
+                      fontWeight={700}
+                    />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </section>
 
-          {/* Топ-10 тегов + облако */}
-          <section className="ec-analytics__section">
-            <h3>Топ-10 тегов</h3>
-            {topTagsChart.length === 0 ? (
-              <p>Пока нет данных по тегам.</p>
+          {/* ========== Теги: горизонтальный бар + облако ========== */}
+          <section style={{ marginBottom: 28 }}>
+            <h3
+              style={{
+                fontFamily: "'DM Serif Display', Georgia, serif",
+                fontSize: 20,
+                fontWeight: 400,
+                margin: "0 0 14px",
+              }}
+            >
+              Топ-10 тегов
+            </h3>
+
+            {topTags.length === 0 ? (
+              <p style={{ color: "#6b7280" }}>Пока нет данных по тегам.</p>
             ) : (
               <>
-                <div className="ec-analytics__chart-container">
-                  <ResponsiveContainer width="100%" height={360}>
+                {/* Горизонтальная диаграмма — теги читаются полностью */}
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.7)",
+                    backdropFilter: "blur(8px)",
+                    border: "1px solid rgba(26,26,46,0.08)",
+                    borderRadius: 14,
+                    padding: 16,
+                  }}
+                >
+                  <ResponsiveContainer
+                    width="100%"
+                    height={Math.max(300, topTags.length * 42)}
+                  >
                     <BarChart
-                      data={topTagsChart}
-                      margin={{ top: 20, right: 20, left: 0, bottom: 70 }}
-                      barCategoryGap={22}
+                      data={topTags}
+                      layout="vertical"
+                      margin={{ top: 5, right: 40, left: 10, bottom: 5 }}
+                      barCategoryGap={12}
                     >
                       <defs>
-                        <linearGradient id="ecTagsGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.95} />
-                          <stop offset="100%" stopColor="#d97706" stopOpacity={0.9} />
+                        <linearGradient id="tagGrad" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor={TAG_GRADIENT[0]} />
+                          <stop offset="100%" stopColor={TAG_GRADIENT[1]} />
                         </linearGradient>
                       </defs>
-
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(26,26,46,0.06)" horizontal={false} />
                       <XAxis
-                        dataKey="tagShort"
-                        interval={0}
-                        angle={-25}
-                        textAnchor="end"
-                        height={80}
-                        tick={{ fill: "#4b5563", fontSize: 13 }}
-                      />
-
-                      <YAxis
+                        type="number"
                         allowDecimals={false}
-                        tick={{ fill: "#4b5563", fontSize: 12 }}
-                        label={{
-                          value: "Количество",
-                          angle: -90,
-                          position: "insideLeft",
-                          offset: 10,
-                          style: {
-                            fill: "#6b7280",
-                            fontSize: 12,
-                            textAnchor: "middle",
-                          },
-                        }}
+                        tick={{ fill: "#6b7280", fontSize: 12 }}
                       />
-
-                      <Tooltip
-                        formatter={(v) => [v, "Количество"]}
-                        labelFormatter={(_, idx) => topTagsChart[idx]?.tag || ""}
-                        cursor={{ fill: "rgba(245,158,11,0.06)" }}
-                        contentStyle={{
-                          borderRadius: 8,
-                          borderColor: "#e5e7eb",
-                          boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
-                        }}
+                      <YAxis
+                        type="category"
+                        dataKey="tag"
+                        width={200}
+                        tick={{ fill: "#374151", fontSize: 13 }}
                       />
-
-                      <Bar dataKey="count" name="Количество" fill="url(#ecTagsGradient)" radius={[8, 8, 2, 2]}>
-                        <LabelList dataKey="count" position="insideMiddle" offset={8} fill="#ffffff" fontSize={18} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Bar
+                        dataKey="count"
+                        name="Количество"
+                        fill="url(#tagGrad)"
+                        radius={[0, 6, 6, 0]}
+                      >
+                        <LabelList
+                          dataKey="count"
+                          position="right"
+                          offset={8}
+                          fill="#1a1a2e"
+                          fontSize={13}
+                          fontWeight={700}
+                        />
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
 
                 {/* Облако тегов */}
-                <div style={{ marginTop: 12 }}>
-                  <h4 style={{ margin: "0 0 10px 0" }}>Облако тегов</h4>
+                <div style={{ marginTop: 16 }}>
+                  <h4
+                    style={{
+                      fontFamily: "'DM Serif Display', Georgia, serif",
+                      fontSize: 17,
+                      fontWeight: 400,
+                      margin: "0 0 10px",
+                    }}
+                  >
+                    Облако тегов
+                  </h4>
                   <TagCloud items={tagCloudItems} />
                 </div>
               </>

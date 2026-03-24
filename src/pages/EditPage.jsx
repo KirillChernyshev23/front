@@ -6,6 +6,9 @@ import {
   kindToBackendType,
   backendTypeToKind,
 } from "../constants/docTypes";
+import AutocompleteInput from "../components/AutocompleteInput";
+
+const NPA_STATUS_OPTIONS = ["Проект", "Принято", "Неактуально"];
 
 // Хелпер: проверить, что source_link у документа — это ссылка на файл из S3/MinIO
 function isInternalSourceLink(doc) {
@@ -33,24 +36,42 @@ export default function EditPage({
   initialDoc,
   onUpdated,
 
-  // куда уйти после сохранения/отмены
   afterSaveHash = "/",
   afterCancelHash = "/",
 
-  // ✅ доп. действие после успешного PATCH (например публикация)
-  afterSave, // async (payload) => {}
+  afterSave,
 
-  // ✅ кастомный текст кнопки "Сохранить"
   saveButtonLabel,
 
-  // ✅ удалить документ (показываем кнопку только если передан onDelete)
-  onDelete, // async () => {}
+  onDelete,
   deleteButtonLabel = "Удалить",
 }) {
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
   const [busyDelete, setBusyDelete] = useState(false);
   const [error, setError] = useState("");
+
+  // Подсказки с бэка
+  const [tagSuggestions, setTagSuggestions] = useState([]);
+  const [npaTypeSuggestions, setNpaTypeSuggestions] = useState([]);
+
+  useEffect(() => {
+    api
+      .listTags()
+      .then((data) => {
+        const list = Array.isArray(data) ? data : [];
+        setTagSuggestions(list);
+      })
+      .catch(() => {});
+
+    api
+      .listUniqueValues("npa_type")
+      .then((data) => {
+        const list = Array.isArray(data) ? data : [];
+        setNpaTypeSuggestions(list);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!initialDoc) return;
@@ -71,12 +92,10 @@ export default function EditPage({
       title: initialDoc.title || "",
       document_date: initialDoc.document_date || "",
       access_level: initialDoc.access_level || initialDoc.accessLevel || "",
-      // если это внутренняя S3-ссылка — не подставляем в поле источника
       source_link: internalSrc ? "" : (initialDoc.source_link || ""),
       tags: tagsArr.join(", "),
     };
 
-    // разворачиваем метаданные по полям формы (кроме даты и ссылки)
     if (typeCfg?.metadataFields?.length) {
       typeCfg.metadataFields.forEach(({ key, isDocDate, isSourceLink }) => {
         if (isDocDate || isSourceLink) return;
@@ -127,7 +146,6 @@ export default function EditPage({
       return;
     }
 
-    // метаданные (только "категориальные", без даты и ссылки)
     const metadataRaw = {};
     let hasNonEmptyMeta = false;
 
@@ -157,7 +175,6 @@ export default function EditPage({
       }
     }
 
-    // теги
     let tagsArr = undefined;
     if (typeof form.tags === "string") {
       tagsArr = form.tags
@@ -189,12 +206,10 @@ export default function EditPage({
     setBusy(true);
     setError("");
     try {
-      // 1) сохраняем
       await api.updateDocument(documentId, payload);
 
       if (onUpdated) await onUpdated();
 
-      // 2) доп. действие (для потенциальных: mark_processed)
       if (afterSave) {
         await afterSave(payload);
       }
@@ -241,6 +256,42 @@ export default function EditPage({
       onChange = (e) => setF(field.key, e.target.value);
       if (field.kind === "date") inputType = "date";
       if (field.kind === "number") inputType = "number";
+    }
+
+    // Автодополнение для «Вид НПА»
+    if (field.key === "npa_type" && !field.isDocDate && !field.isSourceLink) {
+      return (
+        <label key={field.key} className="ec-label">
+          {field.label}
+          <AutocompleteInput
+            className="ec-input"
+            value={value}
+            onChange={(val) => setF(field.key, val)}
+            suggestions={npaTypeSuggestions}
+          />
+        </label>
+      );
+    }
+
+    // Выпадающий список для «Статус НПА»
+    if (field.key === "status" && !field.isDocDate && !field.isSourceLink) {
+      return (
+        <label key={field.key} className="ec-label">
+          {field.label}
+          <select
+            className="ec-input"
+            value={value}
+            onChange={(e) => setF(field.key, e.target.value)}
+          >
+            <option value="">(не задан)</option>
+            {NPA_STATUS_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
     }
 
     const commonProps = { className: "ec-input", value, onChange };
@@ -304,20 +355,25 @@ export default function EditPage({
       <div className="ec-grid-2">
         <label className="ec-label">
           Уровень доступа
-          <input
+          <select
             className="ec-input"
-            value={form.access_level || ""}
+            value={form.access_level}
             onChange={(e) => setF("access_level", e.target.value)}
-            placeholder="public / internal / secret…"
-          />
+          >
+            <option value="">(не задан)</option>
+            <option value="public">публичный</option>
+            <option value="internal">частный</option>
+          </select>
         </label>
 
         <label className="ec-label">
           Ключевые слова / теги (через запятую)
-          <input
+          <AutocompleteInput
             className="ec-input"
             value={form.tags || ""}
-            onChange={(e) => setF("tags", e.target.value)}
+            onChange={(val) => setF("tags", val)}
+            suggestions={tagSuggestions}
+            multi
             placeholder="вуз, аккредитация"
           />
         </label>

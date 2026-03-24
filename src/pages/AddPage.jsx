@@ -1,7 +1,10 @@
 // src/pages/AddPage.jsx
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { DOC_TYPES, kindToBackendType } from "../constants/docTypes";
+import AutocompleteInput from "../components/AutocompleteInput";
+
+const NPA_STATUS_OPTIONS = ["Проект", "Принято", "Неактуально"];
 
 export default function AddPage({ onUploaded }) {
   const [busy, setBusy] = useState(false);
@@ -14,6 +17,28 @@ export default function AddPage({ onUploaded }) {
     tags: "",
     file: null,
   });
+
+  // Подсказки с бэка
+  const [tagSuggestions, setTagSuggestions] = useState([]);
+  const [npaTypeSuggestions, setNpaTypeSuggestions] = useState([]);
+
+  useEffect(() => {
+    api
+      .listTags()
+      .then((data) => {
+        const list = Array.isArray(data) ? data : [];
+        setTagSuggestions(list);
+      })
+      .catch(() => {});
+
+    api
+      .listUniqueValues("npa_type")
+      .then((data) => {
+        const list = Array.isArray(data) ? data : [];
+        setNpaTypeSuggestions(list);
+      })
+      .catch(() => {});
+  }, []);
 
   const setF = (key, value) =>
     setForm((s) => ({
@@ -33,13 +58,11 @@ export default function AddPage({ onUploaded }) {
       return;
     }
 
-    // если для типа есть поле даты — требуем его
     if (docDateField && !form.document_date) {
       alert(`Укажите поле: "${docDateField.label}"`);
       return;
     }
 
-    // Сбор метаданных с учётом числовых полей
     const metadata = {};
     if (typeCfg?.metadataFields?.length) {
       for (const field of typeCfg.metadataFields) {
@@ -50,7 +73,7 @@ export default function AddPage({ onUploaded }) {
 
         let str =
           typeof raw === "string" ? raw.trim() : String(raw).trim();
-        if (!str) continue; // пустое поле не отправляем
+        if (!str) continue;
 
         if (field.valueType === "int") {
           const parsed = parseInt(str, 10);
@@ -65,7 +88,6 @@ export default function AddPage({ onUploaded }) {
       }
     }
 
-    // Если типа даты нет — шлём сегодняшнюю, чтобы не упал бэк
     const documentDateToSend =
       docDateField && form.document_date
         ? form.document_date
@@ -114,6 +136,42 @@ export default function AddPage({ onUploaded }) {
       if (field.kind === "number") inputType = "number";
     }
 
+    // Автодополнение для поля «Вид НПА»
+    if (field.key === "npa_type" && !field.isDocDate && !field.isSourceLink) {
+      return (
+        <label key={field.key} className="ec-label">
+          {field.label}
+          <AutocompleteInput
+            className="ec-input"
+            value={value}
+            onChange={(val) => setF(field.key, val)}
+            suggestions={npaTypeSuggestions}
+          />
+        </label>
+      );
+    }
+
+    // Выпадающий список для поля «Статус НПА»
+    if (field.key === "status" && !field.isDocDate && !field.isSourceLink) {
+      return (
+        <label key={field.key} className="ec-label">
+          {field.label}
+          <select
+            className="ec-input"
+            value={value}
+            onChange={(e) => setF(field.key, e.target.value)}
+          >
+            <option value="">(не задан)</option>
+            {NPA_STATUS_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
     const commonProps = {
       className: "ec-input",
       value,
@@ -147,7 +205,6 @@ export default function AddPage({ onUploaded }) {
     <form className="ec-add" onSubmit={onSubmit}>
       <h2 className="ec-add__title">Добавить документ</h2>
 
-      {/* ОБЩИЕ реквизиты */}
       <div className="ec-grid-2">
         <label className="ec-label">
           Тип документа
@@ -174,33 +231,34 @@ export default function AddPage({ onUploaded }) {
           />
         </label>
       </div>
-    <div className="ec-grid-2">
-      <label className="ec-label">
-        Уровень доступа
-        <select
-          className="ec-input"
-          value={form.access_level}
-          onChange={(e) => setF("access_level", e.target.value)}
-        >
-          <option value="">(не задан)</option>
-          <option value="public">public</option>
-          <option value="internal">internal</option>
-          <option value="secret">secret</option>
-        </select>
-      </label>
+
+      <div className="ec-grid-2">
+        <label className="ec-label">
+          Уровень доступа
+          <select
+            className="ec-input"
+            value={form.access_level}
+            onChange={(e) => setF("access_level", e.target.value)}
+          >
+            <option value="">(не задан)</option>
+            <option value="public">публичный</option>
+            <option value="internal">частный</option>
+          </select>
+        </label>
 
         <label className="ec-label">
           Ключевые слова / теги (через запятую)
-          <input
+          <AutocompleteInput
             className="ec-input"
             value={form.tags}
-            onChange={(e) => setF("tags", e.target.value)}
+            onChange={(val) => setF("tags", val)}
+            suggestions={tagSuggestions}
+            multi
             placeholder="вуз, аккредитация"
           />
         </label>
       </div>
 
-      {/* КАТЕГОРИАЛЬНЫЕ реквизиты */}
       {typeCfg?.metadataFields?.length > 0 && (
         <div className="ec-grid-2">
           {typeCfg.metadataFields.map((field) => renderMetaField(field))}

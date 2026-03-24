@@ -171,8 +171,20 @@ class ApiClient {
     });
   }
 
-  // ------ WORKSPACE (проекты пользователя) ------
-  // Важно: пути идут без /api/v1, потому что base уже = .../api/v1
+  // ------ AUTOCOMPLETE / SUGGESTIONS ------
+
+  /** Список уникальных тегов (GET /api/v1/documents/tags) */
+  async listTags(limit = 1000) {
+    return this._fetch(`/documents/tags?limit=${limit}`, { method: "GET" });
+  }
+
+  /** Уникальные значения по колонке (GET /api/v1/documents/unique-values?column=...) */
+  async listUniqueValues(column, limit = 100) {
+    return this._fetch(
+      `/documents/unique-values?column=${encodeURIComponent(column)}&limit=${limit}`,
+      { method: "GET" }
+    );
+  }
 
   // ------ WORKSPACE (проекты пользователя) ------
 

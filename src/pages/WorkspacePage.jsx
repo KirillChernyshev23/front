@@ -1,7 +1,12 @@
 // src/pages/WorkspacePage.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import PdfWorkspaceViewer from "../components/PdfWorkspaceViewer";
+import {
+  addAnnotation,
+  deleteAnnotation,
+  loadAnnotations,
+} from "../utils/pdfAnnotationsStorage";
 
 function normalizeProjectDoc(d) {
   return {
@@ -13,7 +18,9 @@ function normalizeProjectDoc(d) {
     accessLevel: d?.access_level ?? "",
     documentDate: d?.document_date ?? "",
     createdAt: d?.created_at ?? "",
-    summary: d?.summary ?? "",
+    summary:
+    d?.summary ||
+    "Это тестовое краткое описание документа. Здесь можно проверить, как выглядит карточка документа в левой панели, перенос строк и обрезка текста.",
     fullText: d?.full_text ?? "",
     files: Array.isArray(d?.files) ? d.files : [],
     raw: d,
@@ -68,23 +75,19 @@ function ensureAbsoluteUrl(url) {
 function pickFirstUrl(res) {
   if (!res) return "";
   if (typeof res === "string") return res;
-
   if (typeof res.url === "string") return res.url;
   if (typeof res.download_url === "string") return res.download_url;
   if (typeof res.href === "string") return res.href;
-
   if (Array.isArray(res.urls) && res.urls[0]) return res.urls[0];
   if (Array.isArray(res.download_urls) && res.download_urls[0]) {
     return res.download_urls[0];
   }
-
   if (Array.isArray(res) && res[0]) {
     if (typeof res[0] === "string") return res[0];
     if (typeof res[0] === "object") {
       return res[0].url || res[0].download_url || res[0].href || "";
     }
   }
-
   for (const v of Object.values(res)) {
     if (
       typeof v === "string" &&
@@ -93,7 +96,6 @@ function pickFirstUrl(res) {
       return v;
     }
   }
-
   return "";
 }
 
@@ -105,31 +107,122 @@ function triggerDownload(url) {
   a.click();
 }
 
+function formatDateTime(isoString) {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return isoString;
+  return d.toLocaleString();
+}
+
 export default function WorkspacePage({ onGoList }) {
-  // ---------- Проекты ----------
   const [projects, setProjects] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState(null);
 
-  // ---------- Документы выбранного проекта ----------
+  const [leftView, setLeftView] = useState("projects");
+
   const [documents, setDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState("");
   const [selectedDocId, setSelectedDocId] = useState(null);
 
-  // ---------- PDF ----------
   const [activePdfUrl, setActivePdfUrl] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState("");
 
-  // ---------- UI ----------
+  const [annotations, setAnnotations] = useState([]);
+  const [flashAnnotationId, setFlashAnnotationId] = useState(null);
+  const flashTimerRef = useRef(null);
+  const viewerRef = useRef(null);
+
+  const [pendingSelection, setPendingSelection] = useState(null);
+  const [selectionComment, setSelectionComment] = useState("");
+
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // ---------- Создание проекта ----------
+  const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
+
+  useEffect(() => {
+    if (selectedProjectId && selectedDocId) {
+      setAnnotations(loadAnnotations(selectedProjectId, selectedDocId));
+    } else {
+      setAnnotations([]);
+    }
+    setPendingSelection(null);
+    setSelectionComment("");
+  }, [selectedProjectId, selectedDocId]);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
+
+  const handleTextSelected = useCallback((sel) => {
+    if (!sel?.text && !sel?.warning) {
+      setPendingSelection(null);
+      return;
+    }
+    setPendingSelection(sel);
+    setSelectionComment("");
+  }, []);
+
+  function handleSaveAnnotation() {
+    if (
+      !pendingSelection?.text?.trim() ||
+      !pendingSelection.rects?.length ||
+      !selectedProjectId ||
+      !selectedDocId
+    ) {
+      return;
+    }
+
+    const next = addAnnotation(selectedProjectId, selectedDocId, {
+      page: pendingSelection.page,
+      text: pendingSelection.text,
+      comment: selectionComment.trim(),
+      rects: pendingSelection.rects,
+      documentTitle: selectedDoc?.title || "",
+    });
+
+    setAnnotations(next);
+    setPendingSelection(null);
+    setSelectionComment("");
+
+    const sel = window.getSelection();
+    if (sel) sel.removeAllRanges();
+  }
+
+  function handleCancelSelection() {
+    setPendingSelection(null);
+    setSelectionComment("");
+    const sel = window.getSelection();
+    if (sel) sel.removeAllRanges();
+  }
+
+  function handleDeleteAnnotation(annotationId) {
+    if (!selectedProjectId || !selectedDocId) return;
+    const next = deleteAnnotation(
+      selectedProjectId,
+      selectedDocId,
+      annotationId
+    );
+    setAnnotations(next);
+  }
+
+  function handleScrollToAnnotation(annotation) {
+    viewerRef.current?.scrollToAnnotation(annotation);
+    setFlashAnnotationId(annotation.id);
+
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => {
+      setFlashAnnotationId(null);
+    }, 1800);
+  }
 
   async function loadProjects({
     keepSelection = true,
@@ -141,7 +234,6 @@ export default function WorkspacePage({ onGoList }) {
 
       const data = await api.listWorkspaceProjects();
       const list = asList(data);
-
       setProjects(list);
 
       if (!list.length) {
@@ -168,9 +260,7 @@ export default function WorkspacePage({ onGoList }) {
         (p) => String(getProjectId(p)) === String(selectedProjectId)
       );
 
-      if (!stillExists) {
-        setSelectedProjectId(getProjectId(list[0]));
-      }
+      if (!stillExists) setSelectedProjectId(getProjectId(list[0]));
     } catch (e) {
       setProjectsError(e.message || "Не удалось загрузить проекты");
     } finally {
@@ -191,7 +281,6 @@ export default function WorkspacePage({ onGoList }) {
 
       const data = await api.listWorkspaceProjectDocuments(projectId);
       const list = asList(data).map(normalizeProjectDoc);
-
       setDocuments(list);
 
       if (!list.length) {
@@ -203,9 +292,7 @@ export default function WorkspacePage({ onGoList }) {
         (d) => String(getDocId(d)) === String(selectedDocId)
       );
 
-      if (!stillExists) {
-        setSelectedDocId(getDocId(list[0]));
-      }
+      if (!stillExists) setSelectedDocId(getDocId(list[0]));
     } catch (e) {
       setDocsError(e.message || "Не удалось загрузить документы проекта");
     } finally {
@@ -227,7 +314,6 @@ export default function WorkspacePage({ onGoList }) {
       if (doc.id) {
         const res = await api.getDocumentDownloadUrls(doc.id);
         const url = pickFirstUrl(res);
-
         if (url) {
           setActivePdfUrl(url);
           return;
@@ -244,7 +330,6 @@ export default function WorkspacePage({ onGoList }) {
       setPdfError("Не удалось получить ссылку на PDF");
     } catch (e) {
       const fallbackUrl = getDocSourceLink(doc);
-
       if (fallbackUrl) {
         setActivePdfUrl(ensureAbsoluteUrl(fallbackUrl));
       } else {
@@ -266,25 +351,34 @@ export default function WorkspacePage({ onGoList }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
-  const selectedProject = useMemo(() => {
-    return (
+  const selectedProject = useMemo(
+    () =>
       projects.find(
         (p) => String(getProjectId(p)) === String(selectedProjectId)
-      ) || null
-    );
-  }, [projects, selectedProjectId]);
+      ) || null,
+    [projects, selectedProjectId]
+  );
 
-  const selectedDoc = useMemo(() => {
-    return (
+  const selectedDoc = useMemo(
+    () =>
       documents.find((d) => String(getDocId(d)) === String(selectedDocId)) ||
-      null
-    );
-  }, [documents, selectedDocId]);
+      null,
+    [documents, selectedDocId]
+  );
 
   useEffect(() => {
     resolvePdfUrl(selectedDoc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDoc]);
+
+  function handleSelectProject(id) {
+    setSelectedProjectId(id);
+    setLeftView("documents");
+  }
+
+  function handleBackToProjects() {
+    setLeftView("projects");
+  }
 
   async function handleCreateProject() {
     const name = newProjectName.trim();
@@ -309,12 +403,14 @@ export default function WorkspacePage({ onGoList }) {
 
       setNewProjectName("");
       setNewProjectDescription("");
+      setShowNewProject(false);
       setMessage("Проект создан");
 
       await loadProjects({
         keepSelection: false,
         preferredProjectId: createdId,
       });
+      setLeftView("documents");
     } catch (e) {
       setMessage(e.message || "Не удалось создать проект");
     } finally {
@@ -338,6 +434,7 @@ export default function WorkspacePage({ onGoList }) {
       setMessage("Проект удалён");
 
       await loadProjects({ keepSelection: false });
+      setLeftView("projects");
     } catch (e) {
       setMessage(e.message || "Не удалось удалить проект");
     } finally {
@@ -374,7 +471,6 @@ export default function WorkspacePage({ onGoList }) {
       if (doc?.id) {
         const res = await api.getDocumentDownloadUrls(doc.id);
         const url = pickFirstUrl(res);
-
         if (url) {
           triggerDownload(url);
           return;
@@ -399,11 +495,572 @@ export default function WorkspacePage({ onGoList }) {
     }
   }
 
+  function renderProjectsList() {
+    return (
+      <div
+        style={{
+          background: "rgba(255,255,255,0.75)",
+          backdropFilter: "saturate(180%) blur(10px)",
+          border: "1px solid rgba(255,255,255,0.55)",
+          borderRadius: 14,
+          padding: "0.9rem",
+          boxShadow: "0 2px 8px rgba(2,6,23,0.06)",
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          flex: 1,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            marginBottom: "0.6rem",
+            flexShrink: 0,
+          }}
+        >
+          <h3 style={{ margin: 0, flex: 1, fontSize: 16, fontWeight: 800 }}>Проекты</h3>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowNewProject((v) => !v)}
+            type="button"
+            style={{ fontSize: 12, padding: "0.25rem 0.55rem" }}
+          >
+            {showNewProject ? "Отмена" : "+ Новый"}
+          </button>
+        </div>
+
+        {showNewProject && (
+          <div
+            style={{
+              padding: "0.6rem",
+              marginBottom: "0.6rem",
+              background: "rgba(37,99,235,0.03)",
+              border: "1px solid rgba(37,99,235,0.08)",
+              borderRadius: 10,
+              flexShrink: 0,
+            }}
+          >
+            <input
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              placeholder="Название проекта"
+              style={{
+                width: "100%",
+                padding: "0.4rem 0.55rem",
+                marginBottom: "0.4rem",
+                boxSizing: "border-box",
+                fontSize: 13,
+              }}
+              disabled={busy}
+            />
+            <input
+              value={newProjectDescription}
+              onChange={(e) => setNewProjectDescription(e.target.value)}
+              placeholder="Описание (необязательно)"
+              style={{
+                width: "100%",
+                padding: "0.4rem 0.55rem",
+                marginBottom: "0.4rem",
+                boxSizing: "border-box",
+                fontSize: 13,
+              }}
+              disabled={busy}
+            />
+            <button
+              className="btn btn-primary"
+              onClick={handleCreateProject}
+              disabled={busy}
+              type="button"
+              style={{ width: "100%", padding: "0.35rem", fontSize: 13 }}
+            >
+              Создать
+            </button>
+          </div>
+        )}
+
+        <div style={{ marginBottom: "0.35rem", flexShrink: 0 }}>
+          {projectsLoading && (
+            <div style={{ fontSize: 13 }}>Загрузка проектов…</div>
+          )}
+          {projectsError && (
+            <div style={{ color: "crimson", fontSize: 13 }}>
+              {projectsError}
+            </div>
+          )}
+          {!projectsLoading && !projectsError && projects.length === 0 && (
+            <div style={{ opacity: 0.8, fontSize: 13 }}>
+              Проектов пока нет.
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            overflowY: "auto",
+            minHeight: 0,
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.45rem",
+            paddingRight: 4,
+          }}
+        >
+          {projects.map((p) => {
+            const id = getProjectId(p);
+            const active = String(id) === String(selectedProjectId);
+            const description = getProjectDescription(p);
+
+            return (
+              <div
+                key={String(id)}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "0.45rem",
+                  padding: "0.55rem",
+                  borderRadius: 10,
+                  border: active ? "1.5px solid #2563eb" : "1px solid rgba(15,23,42,0.06)",
+                  background: active ? "rgba(37,99,235,0.04)" : "white",
+                  cursor: "pointer",
+                }}
+                onClick={() => handleSelectProject(id)}
+                role="button"
+                tabIndex={0}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: 16,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {getProjectName(p)}
+                  </div>
+                  {description && (
+                    <div
+                      style={{
+                        fontSize: 14,
+                        opacity: 0.75,
+                        marginTop: 3,
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {description}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteProject(id);
+                  }}
+                  disabled={busy}
+                  type="button"
+                  title="Удалить проект"
+                  style={{ fontSize: 13, padding: "0.15rem" }}
+                >
+                  🗑
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  function renderDocumentsList() {
+    return (
+      <div
+        style={{
+          background: "rgba(255,255,255,0.75)",
+          backdropFilter: "saturate(180%) blur(10px)",
+          border: "1px solid rgba(255,255,255,0.55)",
+          borderRadius: 14,
+          padding: "0.9rem",
+          boxShadow: "0 2px 8px rgba(2,6,23,0.06)",
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          flex: 1,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.35rem",
+            marginBottom: "0.6rem",
+            flexShrink: 0,
+          }}
+        >
+          <button
+            className="btn btn-ghost"
+            onClick={handleBackToProjects}
+            type="button"
+            style={{ fontSize: 15, padding: "0.1rem 0.3rem", lineHeight: 1 }}
+            title="Назад к проектам"
+          >
+            ←
+          </button>
+          <h3
+            style={{
+              margin: 0,
+              flex: 1,
+              fontSize: 16,
+              fontWeight: 800,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {selectedProject ? getProjectName(selectedProject) : "Документы"}
+          </h3>
+        </div>
+
+        <div style={{ marginBottom: "0.35rem", flexShrink: 0 }}>
+          {docsLoading && (
+            <div style={{ fontSize: 13 }}>Загрузка документов…</div>
+          )}
+          {docsError && (
+            <div style={{ color: "crimson", fontSize: 13 }}>{docsError}</div>
+          )}
+          {!docsLoading && !docsError && documents.length === 0 && (
+            <div style={{ opacity: 0.8, fontSize: 13 }}>
+              В проекте пока нет документов.
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            overflowY: "auto",
+            minHeight: 0,
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.45rem",
+            paddingRight: 4,
+          }}
+        >
+          {!docsLoading &&
+            !docsError &&
+            documents.map((d) => {
+              const docId = getDocId(d);
+              const active = String(docId) === String(selectedDocId);
+
+              return (
+                <div
+                  key={String(docId)}
+                  style={{
+                    padding: "0.55rem",
+                    borderRadius: 10,
+                    border: active ? "1.5px solid #2563eb" : "1px solid rgba(15,23,42,0.06)",
+                    background: active ? "rgba(37,99,235,0.04)" : "white",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setSelectedDocId(docId)}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: 16,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {getDocTitle(d)}
+                  </div>
+
+                  <div style={{
+                    fontSize: 11,
+                    marginTop: 3,
+                    display: "inline-block",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: "rgba(15,23,42,0.05)",
+                    color: "#6b7280",
+                    fontWeight: 500,
+                  }}>
+                    {d.documentType || "PDF"}
+                  </div>
+
+                  {!!d.summary && (
+                    <div
+                      style={{
+                        fontSize: 14,
+                        color: "#475569",
+                        opacity: 0.95,
+                        marginTop: 5,
+                        lineHeight: 1.35,
+                        display: "-webkit-box",
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {d.summary}
+                    </div>
+                  )}
+
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "0.35rem",
+                      marginTop: "0.45rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      className="btn btn-secondary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDownloadDoc(d);
+                      }}
+                      disabled={busy}
+                      type="button"
+                      style={{ fontSize: 11, padding: "0.18rem 0.45rem" }}
+                    >
+                      Скачать
+                    </button>
+
+                    <button
+                      className="btn btn-ghost"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteDocFromProject(selectedProjectId, docId);
+                      }}
+                      disabled={busy || !docId}
+                      type="button"
+                      title="Удалить из проекта"
+                      style={{ fontSize: 11, padding: "0.15rem" }}
+                    >
+                      🗑
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSelectionForm() {
+    if (!pendingSelection) return null;
+
+    if (pendingSelection.warning) {
+      return (
+        <div
+          style={{
+            border: "1px solid #f0d090",
+            borderRadius: 10,
+            padding: "0.55rem 0.65rem",
+            background: "#fffef5",
+            flexShrink: 0,
+            fontSize: 12,
+            color: "#b45309",
+          }}
+        >
+          {pendingSelection.warning}
+        </div>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          border: "1px solid rgba(37,99,235,0.12)",
+          borderRadius: 10,
+          padding: "0.65rem",
+          background: "rgba(37,99,235,0.03)",
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>
+          Новая цитата · стр. {pendingSelection.page}
+        </div>
+
+        <div
+          style={{
+            fontSize: 11,
+            lineHeight: 1.35,
+            background: "#fff",
+            border: "1px solid #eee",
+            borderRadius: 6,
+            padding: "0.45rem",
+            marginBottom: "0.45rem",
+            whiteSpace: "pre-wrap",
+            color: "#555",
+            maxHeight: 70,
+            overflowY: "auto",
+          }}
+        >
+          {pendingSelection.text.length > 200
+            ? `${pendingSelection.text.slice(0, 200)}…`
+            : pendingSelection.text}
+        </div>
+
+        <input
+          value={selectionComment}
+          onChange={(e) => setSelectionComment(e.target.value)}
+          placeholder="Комментарий (необязательно)"
+          style={{
+            width: "100%",
+            padding: "0.35rem 0.45rem",
+            borderRadius: 6,
+            border: "1px solid #ddd",
+            fontSize: 12,
+            marginBottom: "0.4rem",
+            boxSizing: "border-box",
+          }}
+        />
+
+        <div style={{ display: "flex", gap: "0.35rem" }}>
+          <button
+            className="btn btn-primary"
+            onClick={handleSaveAnnotation}
+            type="button"
+            style={{ fontSize: 12, padding: "0.28rem 0.55rem", flex: 1 }}
+          >
+            Сохранить
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={handleCancelSelection}
+            type="button"
+            style={{ fontSize: 12, padding: "0.28rem 0.45rem" }}
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCitationsBlock() {
+    return (
+      <div
+        style={{
+          background: "rgba(255,255,255,0.75)",
+          backdropFilter: "saturate(180%) blur(10px)",
+          border: "1px solid rgba(255,255,255,0.55)",
+          borderRadius: 14,
+          padding: "0.7rem 0.8rem",
+          boxShadow: "0 2px 8px rgba(2,6,23,0.06)",
+          flexShrink: 0,
+          minHeight: 120,
+          maxHeight: 320,
+          overflowY: "auto",
+        }}
+      >
+        <div
+          style={{ fontWeight: 800, fontSize: 13, marginBottom: "0.45rem" }}
+        >
+          Цитаты
+        </div>
+
+        {!selectedProjectId || !selectedDocId ? (
+          <div style={{ opacity: 0.7, fontSize: 12 }}>
+            Выберите документ.
+          </div>
+        ) : annotations.length === 0 ? (
+          <div style={{ opacity: 0.7, fontSize: 12 }}>
+            Выделите текст в PDF, чтобы сохранить цитату.
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+            }}
+          >
+            {annotations.map((ann) => (
+              <div
+                key={ann.id}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "0.35rem",
+                  padding: "0.4rem 0.5rem",
+                  border: "1px solid rgba(15,23,42,0.06)",
+                  borderRadius: 10,
+                  background:
+                    flashAnnotationId === ann.id ? "#fff4b8" : "rgba(255,255,255,0.8)",
+                  transition: "background 0.25s ease",
+                  cursor: "pointer",
+                }}
+                onClick={() => handleScrollToAnnotation(ann)}
+                title={ann.text}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {ann.comment?.trim() || "Без комментария"}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      opacity: 0.6,
+                      marginTop: 2,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    стр. {ann.page}
+                    {ann.text ? ` · ${ann.text.slice(0, 70)}` : ""}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteAnnotation(ann.id);
+                  }}
+                  title={`Удалить (${formatDateTime(ann.createdAt)})`}
+                  style={{ fontSize: 11, padding: "0.1rem", flexShrink: 0 }}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
-        padding: "1rem",
-        height: "calc(100vh - 150px)",
+        padding: "0.5rem 0.75rem",
+        height: "100%",
+        width: "100%",
+        maxWidth: "none",
+        boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -414,29 +1071,31 @@ export default function WorkspacePage({ onGoList }) {
           display: "flex",
           alignItems: "center",
           gap: "0.5rem",
-          marginBottom: "1rem",
+          marginBottom: "0.5rem",
           flexShrink: 0,
         }}
       >
-        <h2 style={{ margin: 0 }}>Мои проекты</h2>
+        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Мои проекты</h2>
         <div style={{ flex: 1 }} />
         <button
           className="btn btn-secondary"
           onClick={onGoList}
           type="button"
         >
-          Назад к поиску
+          ← Назад к поиску
         </button>
       </div>
 
       {message && (
         <div
           style={{
-            marginBottom: "0.75rem",
-            padding: "0.5rem 0.75rem",
-            background: "#f5f5f5",
-            borderRadius: 8,
+            marginBottom: "0.4rem",
+            padding: "0.35rem 0.75rem",
+            background: "rgba(37,99,235,0.06)",
+            border: "1px solid rgba(37,99,235,0.12)",
+            borderRadius: 10,
             flexShrink: 0,
+            fontSize: 13,
           }}
         >
           {message}
@@ -448,365 +1107,55 @@ export default function WorkspacePage({ onGoList }) {
           flex: 1,
           minHeight: 0,
           display: "grid",
-          gridTemplateColumns: "360px minmax(0, 1fr)",
-          gap: "1rem",
+          gridTemplateColumns: "700px minmax(0, 1fr)",
+          gap: "0.75rem",
           overflow: "hidden",
         }}
       >
-        {/* Левый столбец */}
+        {/* Левая панель */}
         <div
           style={{
-            display: "grid",
-            gridTemplateRows: "auto minmax(0, 1fr)",
-            gap: "0.75rem",
-            minHeight: 0,
-            overflow: "hidden",
-          }}
-        >
-          {/* Маленький блок создания проекта */}
-          <div
-            style={{
-              border: "1px solid #eee",
-              borderRadius: 12,
-              padding: "0.75rem",
-              flexShrink: 0,
-            }}
-          >
-            <h3 style={{ marginTop: 0, marginBottom: "0.75rem" }}>
-              Новый проект
-            </h3>
-
-            <input
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="Название проекта"
-              style={{
-                width: "100%",
-                padding: "0.5rem",
-                marginBottom: "0.5rem",
-              }}
-              disabled={busy}
-            />
-
-            <textarea
-              value={newProjectDescription}
-              onChange={(e) => setNewProjectDescription(e.target.value)}
-              placeholder="Описание проекта (необязательно)"
-              style={{
-                width: "100%",
-                padding: "0.5rem",
-                minHeight: 70,
-                resize: "vertical",
-                marginBottom: "0.5rem",
-              }}
-              disabled={busy}
-            />
-
-            <button
-              className="btn btn-primary"
-              onClick={handleCreateProject}
-              disabled={busy}
-              type="button"
-              style={{ width: "100%" }}
-            >
-              Создать проект
-            </button>
-          </div>
-
-          {/* Две половины: проекты / документы */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)",
-              gap: "0.75rem",
-              minHeight: 0,
-              overflow: "hidden",
-            }}
-          >
-            {/* Блок проектов */}
-            <div
-              style={{
-                border: "1px solid #eee",
-                borderRadius: 12,
-                padding: "0.75rem",
-                display: "grid",
-                gridTemplateRows: "auto auto minmax(0, 1fr)",
-                minHeight: 0,
-                overflow: "hidden",
-              }}
-            >
-              <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>Проекты</h3>
-
-              <div style={{ marginBottom: "0.5rem", flexShrink: 0 }}>
-                {projectsLoading && <div>Загрузка проектов…</div>}
-                {projectsError && (
-                  <div style={{ color: "crimson" }}>{projectsError}</div>
-                )}
-                {!projectsLoading && !projectsError && projects.length === 0 && (
-                  <div style={{ opacity: 0.8 }}>
-                    Проектов пока нет.
-                  </div>
-                )}
-              </div>
-
-              <div
-                style={{
-                  overflowY: "auto",
-                  minHeight: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.5rem",
-                  paddingRight: 4,
-                }}
-              >
-                {projects.map((p) => {
-                  const id = getProjectId(p);
-                  const active = String(id) === String(selectedProjectId);
-                  const description = getProjectDescription(p);
-
-                  return (
-                    <div
-                      key={String(id)}
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: "0.5rem",
-                        padding: "0.5rem",
-                        borderRadius: 10,
-                        border: active ? "1px solid #bbb" : "1px solid #eee",
-                        background: active ? "#fafafa" : "white",
-                        cursor: "pointer",
-                      }}
-                      onClick={() => setSelectedProjectId(id)}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontWeight: 600,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {getProjectName(p)}
-                        </div>
-
-                        {description && (
-                          <div
-                            style={{
-                              fontSize: 12,
-                              opacity: 0.75,
-                              marginTop: 4,
-                              lineHeight: 1.35,
-                            }}
-                          >
-                            {description}
-                          </div>
-                        )}
-                      </div>
-
-                      <button
-                        className="btn btn-ghost"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteProject(id);
-                        }}
-                        disabled={busy}
-                        type="button"
-                        title="Удалить проект"
-                      >
-                        🗑
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Блок документов */}
-            <div
-              style={{
-                border: "1px solid #eee",
-                borderRadius: 12,
-                padding: "0.75rem",
-                display: "grid",
-                gridTemplateRows: "auto auto minmax(0, 1fr)",
-                minHeight: 0,
-                overflow: "hidden",
-              }}
-            >
-              <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-                Документы
-                {selectedProject ? (
-                  <span style={{ fontWeight: 400, opacity: 0.7 }}>
-                    {" "}
-                    · {getProjectName(selectedProject)}
-                  </span>
-                ) : null}
-              </h3>
-
-              <div style={{ marginBottom: "0.5rem", flexShrink: 0 }}>
-                {!selectedProjectId && (
-                  <div style={{ opacity: 0.8 }}>Сначала выбери проект</div>
-                )}
-
-                {selectedProjectId && docsLoading && <div>Загрузка документов…</div>}
-
-                {selectedProjectId && docsError && (
-                  <div style={{ color: "crimson" }}>{docsError}</div>
-                )}
-
-                {selectedProjectId &&
-                  !docsLoading &&
-                  !docsError &&
-                  documents.length === 0 && (
-                    <div style={{ opacity: 0.8 }}>
-                      В проекте пока нет документов.
-                    </div>
-                  )}
-              </div>
-
-              <div
-                style={{
-                  overflowY: "auto",
-                  minHeight: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.5rem",
-                  paddingRight: 4,
-                }}
-              >
-                {selectedProjectId &&
-                  !docsLoading &&
-                  !docsError &&
-                  documents.map((d) => {
-                    const docId = getDocId(d);
-                    const active = String(docId) === String(selectedDocId);
-
-                    return (
-                      <div
-                        key={String(docId)}
-                        style={{
-                          padding: "0.6rem",
-                          borderRadius: 10,
-                          border: active ? "1px solid #bbb" : "1px solid #eee",
-                          background: active ? "#fafafa" : "white",
-                          cursor: "pointer",
-                        }}
-                        onClick={() => setSelectedDocId(docId)}
-                        role="button"
-                        tabIndex={0}
-                      >
-                        <div
-                          style={{
-                            fontWeight: 600,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {getDocTitle(d)}
-                        </div>
-
-                        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-                          {d.documentType || "PDF"}
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: "0.4rem",
-                            marginTop: "0.5rem",
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <button
-                            className="btn btn-secondary"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedDocId(docId);
-                            }}
-                            disabled={busy}
-                            type="button"
-                          >
-                            Открыть
-                          </button>
-
-                          <button
-                            className="btn btn-secondary"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDownloadDoc(d);
-                            }}
-                            disabled={busy}
-                            type="button"
-                          >
-                            Скачать
-                          </button>
-
-                          <button
-                            className="btn btn-ghost"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteDocFromProject(selectedProjectId, docId);
-                            }}
-                            disabled={busy || !docId}
-                            type="button"
-                            title="Удалить из проекта"
-                          >
-                            🗑
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Правая рабочая зона */}
-        <div
-          style={{
-            border: "1px solid #eee",
-            borderRadius: 12,
-            padding: "0.75rem",
-            minWidth: 0,
-            minHeight: 0,
             display: "flex",
             flexDirection: "column",
+            gap: "0.6rem",
+            minHeight: 0,
             overflow: "hidden",
           }}
         >
-          <div style={{ marginBottom: "0.75rem", flexShrink: 0 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 6 }}>Работа с документами</h3>
+          {leftView === "projects"
+            ? renderProjectsList()
+            : renderDocumentsList()}
 
-            {selectedDoc ? (
-              <div>
-                <div style={{ fontWeight: 600 }}>{selectedDoc.title}</div>
-              </div>
-            ) : (
-              <div style={{ opacity: 0.8 }}>
-                Выберите нужный документ
-              </div>
-            )}
-          </div>
+          {leftView === "documents" && renderSelectionForm()}
+          {leftView === "documents" && renderCitationsBlock()}
+        </div>
 
-          <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-            <PdfWorkspaceViewer
-              fileUrl={activePdfUrl}
-              projectId={selectedProjectId}
-              documentId={selectedDocId}
-              documentTitle={selectedDoc?.title || ""}
-              loading={pdfLoading}
-              error={pdfError}
-              onDownload={() => {
-                if (selectedDoc) handleDownloadDoc(selectedDoc);
-              }}
-            />
-          </div>
+        {/* Правая зона — PDF */}
+        <div
+          style={{
+            background: "rgba(255,255,255,0.5)",
+            border: "1px solid rgba(255,255,255,0.55)",
+            borderRadius: 14,
+            boxShadow: "0 2px 8px rgba(2,6,23,0.06)",
+            minWidth: 0,
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          <PdfWorkspaceViewer
+            ref={viewerRef}
+            fileUrl={activePdfUrl}
+            documentId={selectedDocId}
+            documentTitle={selectedDoc?.title || ""}
+            loading={pdfLoading}
+            error={pdfError}
+            onDownload={() => {
+              if (selectedDoc) handleDownloadDoc(selectedDoc);
+            }}
+            annotations={annotations}
+            flashAnnotationId={flashAnnotationId}
+            onTextSelected={handleTextSelected}
+          />
         </div>
       </div>
     </div>

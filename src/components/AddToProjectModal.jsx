@@ -199,7 +199,7 @@ export default function AddToProjectModal({ open, documentId, onClose }) {
             <div style={{ fontSize: 13, opacity: 0.7, marginTop: 2 }}>
               {mode === "select"
                 ? "Выбери существующий проект"
-                : "Новый проект сразу получит этот документ"}
+                : "Документ будет добавлен в новый"}
             </div>
           </div>
 
